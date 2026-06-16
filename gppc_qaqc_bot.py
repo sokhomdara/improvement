@@ -18,6 +18,8 @@ Setup:
 import os
 import logging
 import json
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -30,7 +32,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # ─────────────────────────────────────────────
 # CONFIG — Edit these before running
 # ─────────────────────────────────────────────
-BOT_TOKEN = "8660783157:AAF6Em-gZa0gEz8lynP8p5Z_9u7eCwJAZlc"  # From @BotFather
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8660783157:AAF6Em-gZa0gEz8lynP8p5Z_9u7eCwJAZlc")
 EXCEL_FILE = "GPPC_QAQC_Reports.xlsx"  # Auto-created if not exists
 PHOTO_DIR  = "qaqc_photos"             # Folder to save photos
 
@@ -506,9 +508,29 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# KEEP-ALIVE SERVER (prevents Render from sleeping)
+# ─────────────────────────────────────────────
+class KeepAliveHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"GPPC QAQC Bot is alive!")
+    def log_message(self, format, *args):
+        pass  # suppress logs
+
+def keep_alive():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), KeepAliveHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.daemon = True
+    thread.start()
+    print(f"🌐 Keep-alive server running on port {port}")
+
 def main():
     init_excel()
     os.makedirs(PHOTO_DIR, exist_ok=True)
+    keep_alive()  # Start web server so Render stays awake
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
