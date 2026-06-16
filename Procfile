@@ -1,1 +1,1 @@
-worker: python gppc_qaqc_bot.py
+web: python gppc_qaqc_bot.py
