@@ -116,11 +116,13 @@ def save_to_excel(data: dict):
     status = data.get("status", "Open")
     fill = YELLOW_FILL if status == "Open" else GREEN_FILL if status == "Closed" else RED_FILL
 
+    before_path = data.get("photo_before_path", "")
+    after_path  = data.get("photo_after_path", "")
     row_data = [
         report_no,
         data.get("date", ""),
-        data.get("photo_before_path", ""),
-        data.get("photo_after_path", ""),
+        "",
+        "",
         data.get("zone", ""),
         data.get("block", ""),
         data.get("unit", ""),
@@ -143,7 +145,18 @@ def save_to_excel(data: dict):
         cell.font = Font(name="Arial", size=10)
         cell.alignment = Alignment(vertical="center", wrap_text=True)
         cell.border = THIN_BORDER
-    ws.row_dimensions[next_row].height = 18
+    row_height = 18
+    for ph, col_idx in [(before_path, 3), (after_path, 4)]:
+        if ph and os.path.exists(ph):
+            try:
+                img = openpyxl.drawing.image.Image(ph)
+                img.width, img.height = 80, 60
+                img.anchor = openpyxl.utils.get_column_letter(col_idx) + str(next_row)
+                ws.add_image(img)
+                row_height = 50
+            except Exception:
+                ws.cell(row=next_row, column=col_idx, value=ph)
+    ws.row_dimensions[next_row].height = row_height
     wb.save(EXCEL_FILE)
     return report_no
 
