@@ -116,8 +116,8 @@ def save_to_excel(data: dict):
     status = data.get("status", "Open")
     fill = YELLOW_FILL if status == "Open" else GREEN_FILL if status == "Closed" else RED_FILL
 
-    before_path = data.get("photo_before_path", "")
-    after_path  = data.get("photo_after_path", "")
+    before_url = data.get("photo_before_path", "")
+    after_url  = data.get("photo_after_path", "")
     row_data = [
         report_no,
         data.get("date", ""),
@@ -145,18 +145,16 @@ def save_to_excel(data: dict):
         cell.font = Font(name="Arial", size=10)
         cell.alignment = Alignment(vertical="center", wrap_text=True)
         cell.border = THIN_BORDER
-    row_height = 18
-    for ph, col_idx in [(before_path, 3), (after_path, 4)]:
-        if ph and os.path.exists(ph):
-            try:
-                img = openpyxl.drawing.image.Image(ph)
-                img.width, img.height = 80, 60
-                img.anchor = openpyxl.utils.get_column_letter(col_idx) + str(next_row)
-                ws.add_image(img)
-                row_height = 50
-            except Exception:
-                ws.cell(row=next_row, column=col_idx, value=ph)
-    ws.row_dimensions[next_row].height = row_height
+    # Save photo URLs as clickable hyperlinks in Excel
+    for url, col_idx, label in [(before_url, 3, "📷 BEFORE"), (after_url, 4, "✅ AFTER")]:
+        if url:
+            cell = ws.cell(row=next_row, column=col_idx, value=label)
+            cell.hyperlink = url
+            cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+            cell.fill = fill
+            cell.border = THIN_BORDER
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[next_row].height = 18
     wb.save(EXCEL_FILE)
     return report_no
 
@@ -169,7 +167,10 @@ def update_excel_status(report_no: int, new_status: str, remark: str, photo_afte
             row[16].value = new_status   # Status col
             row[18].value = remark        # Remark col
             if photo_after:
-                row[3].value = photo_after  # Picture After col
+                cell = row[3]
+                cell.value = "✅ AFTER"
+                cell.hyperlink = photo_after
+                cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
             fill = GREEN_FILL if new_status == "Closed" else YELLOW_FILL
             for cell in row:
                 cell.fill = fill
@@ -218,13 +219,9 @@ def summary_text(data: dict, report_no=None) -> str:
     )
 
 async def save_photo(bot, file_id: str, label: str) -> str:
-    """Download Telegram photo and save locally. Returns file path."""
-    os.makedirs(PHOTO_DIR, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = os.path.join(PHOTO_DIR, f"{label}_{ts}.jpg")
+    """Get Telegram photo URL. Returns direct URL to photo."""
     photo_file = await bot.get_file(file_id)
-    await photo_file.download_to_drive(path)
-    return path
+    return photo_file.file_path  # Returns full https://api.telegram.org/file/bot.../photo.jpg
 
 # ─────────────────────────────────────────────
 # /START & /HELP
