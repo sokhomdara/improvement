@@ -3,7 +3,9 @@ GPPC QAQC Telegram Bot
 ======================
 Project: Grand Phnom Penh City
 Usage: Team sends /report command with photos in group chat.
-       Bot collects data step-by-step and saves to Excel (QAQC template format).
+       Bot collects data using BUTTONS, editing ONE message per flow
+       (clean, doesn't spam the group chat with new bubbles).
+       Saves to Excel (QAQC template format).
 
 Requirements:
     pip install python-telegram-bot openpyxl
@@ -11,13 +13,12 @@ Requirements:
 Setup:
     1. Create bot via @BotFather → get BOT_TOKEN
     2. Add bot to your Telegram group as Admin
-    3. Set BOT_TOKEN and EXCEL_FILE below
+    3. Set BOT_TOKEN below (or via environment variable)
     4. Run: python gppc_qaqc_bot.py
 """
 
 import os
 import logging
-import json
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
@@ -32,25 +33,35 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 # ─────────────────────────────────────────────
 # CONFIG — Edit these before running
 # ─────────────────────────────────────────────
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8660783157:AAF6Em-gZa0gEz8lynP8p5Z_9u7eCwJAZlc")
-EXCEL_FILE = "GPPC_QAQC_Reports.xlsx"  # Auto-created if not exists
-PHOTO_DIR  = "qaqc_photos"             # Folder to save photos
+BOT_TOKEN  = os.environ.get("BOT_TOKEN", "8660783157:AAF6Em-gZa0gEz8lynP8p5Z_9u7eCwJAZlc")
+EXCEL_FILE = "GPPC_QAQC_Reports.xlsx"
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────
 # CONVERSATION STATES
 # ─────────────────────────────────────────────
 (
-    ASK_ZONE, ASK_BLOCK, ASK_UNIT, ASK_FLOOR,
-    ASK_HTYPE, ASK_ACTION, ASK_WORKTYPE, ASK_VENDOR,
-    ASK_SUPERVISOR, ASK_ENGINEER, ASK_RAISED,
-    ASK_PHOTO_BEFORE, ASK_PHOTO_AFTER, ASK_COMMENT,
-    CONFIRM,
+    PICK_ZONE, PICK_BLOCK, TYPE_UNIT, PICK_FLOOR,
+    PICK_HTYPE, TYPE_ACTION, PICK_WORKTYPE, PICK_VENDOR,
+    PICK_SUPERVISOR, PICK_ENGINEER,
+    PICK_RAISED,
+    PHOTO_BEFORE, PHOTO_AFTER, TYPE_COMMENT, CONFIRM,
     # Update flow
-    UPD_SELECT, UPD_STATUS, UPD_COMMENT, UPD_PHOTO
+    UPD_SELECT, UPD_STATUS, UPD_COMMENT, UPD_PHOTO,
 ) = range(19)
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Preset quick-pick options (most-used values) — bot still allows custom text entry
+ZONES        = ["16", "17", "18", "19", "20"]
+BLOCKS       = ["1", "2", "3", "8", "12"]
+FLOORS       = ["GF", "1F", "2F", "3F", "RF", "EX", "Exterior", "Underground"]
+HTYPES       = ["QNBII", "TWSE", "QNAG", "QN", "QBII"]
+WORKTYPES    = [("🪟 Finishing", "Finishing"), ("🏗️ Structure", "Structure"), ("⚡ MEP", "MEP")]
+VENDORS      = ["ឡាច ពៅ", "វ៉ាន់ សាគីន", "ថន ផល្លា", "Pholla", "NIPPON", "Dulux"]
+SUPERVISORS  = ["C103", "C33", "C39", "C63", "E20"]
+ENGINEERS    = ["C64", "C118", "M21", "C45", "E83"]
+RAISED_BY    = ["Q10", "Q21", "Q22", "Q26"]
 
 # ─────────────────────────────────────────────
 # EXCEL SETUP
@@ -73,7 +84,6 @@ THIN_BORDER  = Border(
 )
 
 def init_excel():
-    """Create Excel file with GPPC template header if not exists."""
     if os.path.exists(EXCEL_FILE):
         return
     wb = openpyxl.Workbook()
@@ -92,7 +102,6 @@ def init_excel():
         cell.font = HEADER_FONT
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
         cell.border = THIN_BORDER
-    # Column widths
     col_widths = [5,12,15,15,8,8,12,10,12,40,15,15,15,12,18,14,12,15,20]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
@@ -102,12 +111,10 @@ def get_next_row_and_no():
     wb = openpyxl.load_workbook(EXCEL_FILE)
     ws = wb.active
     row = ws.max_row + 1
-    # Count existing data rows (skip header rows 1-3)
     data_rows = max(0, ws.max_row - 3)
     return row, data_rows + 1
 
 def save_to_excel(data: dict):
-    """Append one report row to Excel."""
     init_excel()
     wb = openpyxl.load_workbook(EXCEL_FILE)
     ws = wb.active
@@ -116,8 +123,8 @@ def save_to_excel(data: dict):
     status = data.get("status", "Open")
     fill = YELLOW_FILL if status == "Open" else GREEN_FILL if status == "Closed" else RED_FILL
 
-    before_url = data.get("photo_before_path", "")
-    after_url  = data.get("photo_after_path", "")
+    before_url = data.get("photo_before_url", "")
+    after_url  = data.get("photo_after_url", "")
     row_data = [
         report_no,
         data.get("date", ""),
@@ -145,7 +152,6 @@ def save_to_excel(data: dict):
         cell.font = Font(name="Arial", size=10)
         cell.alignment = Alignment(vertical="center", wrap_text=True)
         cell.border = THIN_BORDER
-    # Save photo URLs as clickable hyperlinks in Excel
     for url, col_idx, label in [(before_url, 3, "📷 BEFORE"), (after_url, 4, "✅ AFTER")]:
         if url:
             cell = ws.cell(row=next_row, column=col_idx, value=label)
@@ -158,18 +164,17 @@ def save_to_excel(data: dict):
     wb.save(EXCEL_FILE)
     return report_no
 
-def update_excel_status(report_no: int, new_status: str, remark: str, photo_after: str):
-    """Update status and remark for an existing report."""
+def update_excel_status(report_no: int, new_status: str, remark: str, photo_after_url: str):
     wb = openpyxl.load_workbook(EXCEL_FILE)
     ws = wb.active
     for row in ws.iter_rows(min_row=4):
         if row[0].value == report_no:
-            row[16].value = new_status   # Status col
-            row[18].value = remark        # Remark col
-            if photo_after:
+            row[16].value = new_status
+            row[18].value = remark
+            if photo_after_url:
                 cell = row[3]
                 cell.value = "✅ AFTER"
-                cell.hyperlink = photo_after
+                cell.hyperlink = photo_after_url
                 cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
             fill = GREEN_FILL if new_status == "Closed" else YELLOW_FILL
             for cell in row:
@@ -178,7 +183,6 @@ def update_excel_status(report_no: int, new_status: str, remark: str, photo_afte
     wb.save(EXCEL_FILE)
 
 def get_all_reports():
-    """Return list of (no, zone, block, action, status) for /list."""
     if not os.path.exists(EXCEL_FILE):
         return []
     wb = openpyxl.load_workbook(EXCEL_FILE, data_only=True)
@@ -199,29 +203,73 @@ def get_all_reports():
 def status_emoji(s):
     return {"Open": "🟡", "In Progress": "🔵", "Closed": "🟢"}.get(s, "⚪")
 
-def summary_text(data: dict, report_no=None) -> str:
+def progress_bar(step, total=13):
+    filled = "●" * step
+    empty = "○" * (total - step)
+    return f"{filled}{empty} {step}/{total}"
+
+def grid_buttons(options, prefix, per_row=3, custom=True):
+    """Build inline keyboard grid from a list of strings, plus a custom-entry button."""
+    rows = []
+    row = []
+    for i, opt in enumerate(options, 1):
+        row.append(InlineKeyboardButton(opt, callback_data=f"{prefix}:{opt}"))
+        if i % per_row == 0:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    if custom:
+        rows.append([InlineKeyboardButton("✏️ Type custom...", callback_data=f"{prefix}:__custom__")])
+    return InlineKeyboardMarkup(rows)
+
+def summary_text(d: dict, report_no=None) -> str:
     no_str = f"#️⃣ Report No: *{report_no}*\n" if report_no else ""
     return (
         f"📋 *GPPC QAQC DEFECT REPORT*\n"
-        f"{'─'*30}\n"
+        f"{'─'*28}\n"
         f"{no_str}"
-        f"📅 Date: {data.get('date','')}\n"
-        f"📍 Zone {data.get('zone','')} / Block {data.get('block','')} {data.get('unit','')}\n"
-        f"🏠 Floor: {data.get('floor','')} | Type: {data.get('htype','')}\n"
-        f"⚠️ *Defect:* {data.get('action','')}\n"
-        f"🔧 Work Type: {data.get('worktype','')}\n"
-        f"🏗️ Vendor: {data.get('vendor','')}\n"
-        f"👷 Supervisor: {data.get('supervisor','')} | Engineer: {data.get('engineer','')}\n"
-        f"🔎 Raised By: {data.get('raised','')}\n"
-        f"📌 Status: {status_emoji(data.get('status','Open'))} {data.get('status','Open')}\n"
-        f"💬 Comment: {data.get('comment','—')}\n"
-        f"{'─'*30}"
+        f"📅 {d.get('date','')}\n"
+        f"📍 Zone {d.get('zone','')} / Block {d.get('block','')} {d.get('unit','')}\n"
+        f"🏠 {d.get('floor','')} — {d.get('htype','')}\n"
+        f"⚠️ {d.get('action','')}\n"
+        f"🔧 {d.get('worktype','')} | 🏗️ {d.get('vendor','')}\n"
+        f"👷 Sup: {d.get('supervisor','')} | Eng: {d.get('engineer','')}\n"
+        f"🔎 Raised by: {d.get('raised','')}\n"
+        f"📌 {status_emoji(d.get('status','Open'))} {d.get('status','Open')}\n"
+        f"💬 {d.get('comment','—')}"
     )
 
-async def save_photo(bot, file_id: str, label: str) -> str:
-    """Get Telegram photo URL. Returns direct URL to photo."""
-    photo_file = await bot.get_file(file_id)
-    return photo_file.file_path  # Returns full https://api.telegram.org/file/bot.../photo.jpg
+async def get_photo_url(bot, file_id: str) -> str:
+    f = await bot.get_file(file_id)
+    return f.file_path
+
+async def edit_or_send(update: Update, ctx, text, reply_markup=None):
+    """Edit the tracked message if possible, else send new and track it."""
+    chat_id = update.effective_chat.id
+    msg_id = ctx.user_data.get("flow_msg_id")
+    if update.callback_query:
+        try:
+            await update.callback_query.edit_message_text(
+                text, parse_mode="Markdown", reply_markup=reply_markup
+            )
+            ctx.user_data["flow_msg_id"] = update.callback_query.message.message_id
+            return
+        except Exception:
+            pass
+    if msg_id:
+        try:
+            await ctx.bot.edit_message_text(
+                chat_id=chat_id, message_id=msg_id, text=text,
+                parse_mode="Markdown", reply_markup=reply_markup
+            )
+            return
+        except Exception:
+            pass
+    sent = await ctx.bot.send_message(
+        chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=reply_markup
+    )
+    ctx.user_data["flow_msg_id"] = sent.message_id
 
 # ─────────────────────────────────────────────
 # /START & /HELP
@@ -242,236 +290,459 @@ async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await start(update, ctx)
 
 # ─────────────────────────────────────────────
-# /REPORT CONVERSATION
+# /REPORT — button-driven, single message edited throughout
 # ─────────────────────────────────────────────
 async def report_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data.clear()
     ctx.user_data["date"] = datetime.now().strftime("%Y-%m-%d")
     ctx.user_data["status"] = "Open"
-    await update.message.reply_text(
-        "📋 *New Defect Report*\nStep 1/13\n\n"
-        "Enter *Zone* number:\n_(e.g. 16, 17, 19)_",
-        parse_mode="Markdown"
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    sent = await update.effective_chat.send_message(
+        f"📋 *New Defect Report*\n{progress_bar(1)}\n\nSelect *Zone*:",
+        parse_mode="Markdown",
+        reply_markup=grid_buttons(ZONES, "zone")
     )
-    return ASK_ZONE
+    ctx.user_data["flow_msg_id"] = sent.message_id
+    return PICK_ZONE
 
-async def ask_block(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def pick_zone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(1)}\n\n✏️ Type the *Zone* number:")
+        return PICK_ZONE
+    ctx.user_data["zone"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Zone: *{val}* ✅\n\n{progress_bar(2)}\n\nSelect *Block*:",
+        grid_buttons(BLOCKS, "block")
+    )
+    return PICK_BLOCK
+
+async def text_fallback_zone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["zone"] = update.message.text.strip()
-    await update.message.reply_text("Step 2/13\n\nEnter *Block* number:\n_(e.g. 1, 2, 8)_", parse_mode="Markdown")
-    return ASK_BLOCK
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"Zone: *{ctx.user_data['zone']}* ✅\n\n{progress_bar(2)}\n\nSelect *Block*:",
+        grid_buttons(BLOCKS, "block")
+    )
+    return PICK_BLOCK
 
-async def ask_unit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def pick_block(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(2)}\n\n✏️ Type the *Block* number:")
+        return PICK_BLOCK
+    ctx.user_data["block"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Block: *{val}* ✅\n\n{progress_bar(3)}\n\n✏️ Type the *House / Unit number*:\n_(e.g. #38 — or type - to skip)_"
+    )
+    return TYPE_UNIT
+
+async def text_fallback_block(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["block"] = update.message.text.strip()
-    await update.message.reply_text("Step 3/13\n\nEnter *# House / Unit*:\n_(e.g. #38, #26 — or skip with -)_", parse_mode="Markdown")
-    return ASK_UNIT
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"Block: *{ctx.user_data['block']}* ✅\n\n{progress_bar(3)}\n\n✏️ Type the *House / Unit number*:\n_(e.g. #38 — or type - to skip)_"
+    )
+    return TYPE_UNIT
 
-async def ask_floor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def type_unit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val = update.message.text.strip()
     ctx.user_data["unit"] = "" if val == "-" else val
-    kb = [[
-        InlineKeyboardButton("GF", callback_data="GF"),
-        InlineKeyboardButton("1F", callback_data="1F"),
-        InlineKeyboardButton("2F", callback_data="2F"),
-        InlineKeyboardButton("3F", callback_data="3F"),
-    ],[
-        InlineKeyboardButton("RF", callback_data="RF"),
-        InlineKeyboardButton("EX", callback_data="EX"),
-        InlineKeyboardButton("Exterior", callback_data="Exterior"),
-        InlineKeyboardButton("Underground", callback_data="Underground"),
-    ]]
-    await update.message.reply_text("Step 4/13\n\n🏠 Select *Floor*:", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(kb))
-    return ASK_FLOOR
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"Unit: *{ctx.user_data['unit'] or '—'}* ✅\n\n{progress_bar(4)}\n\nSelect *Floor*:",
+        grid_buttons(FLOORS, "floor", per_row=4, custom=False)
+    )
+    return PICK_FLOOR
 
-async def floor_chosen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    ctx.user_data["floor"] = query.data
-    await query.edit_message_text(f"Floor: *{query.data}* ✅\n\nStep 5/13\n\nEnter *House Type*:\n_(e.g. QNBII, TWSE, QNAG, QN)_", parse_mode="Markdown")
-    return ASK_HTYPE
+async def pick_floor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    ctx.user_data["floor"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Floor: *{val}* ✅\n\n{progress_bar(5)}\n\nSelect *House Type*:",
+        grid_buttons(HTYPES, "htype")
+    )
+    return PICK_HTYPE
 
-async def ask_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def pick_htype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(5)}\n\n✏️ Type the *House Type*:")
+        return PICK_HTYPE
+    ctx.user_data["htype"] = val
+    await edit_or_send(
+        update, ctx,
+        f"House Type: *{val}* ✅\n\n{progress_bar(6)}\n\n✏️ Describe the *Defect / Action Required*:\n_(Khmer or English)_"
+    )
+    return TYPE_ACTION
+
+async def text_fallback_htype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["htype"] = update.message.text.strip()
-    await update.message.reply_text("Step 6/13\n\n⚠️ Describe the *Defect / Action Required*:\n_(Type in Khmer or English)_", parse_mode="Markdown")
-    return ASK_ACTION
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"House Type: *{ctx.user_data['htype']}* ✅\n\n{progress_bar(6)}\n\n✏️ Describe the *Defect / Action Required*:\n_(Khmer or English)_"
+    )
+    return TYPE_ACTION
 
-async def ask_worktype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def type_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["action"] = update.message.text.strip()
-    kb = [[
-        InlineKeyboardButton("🪟 Finishing", callback_data="Finishing"),
-        InlineKeyboardButton("🏗️ Structure", callback_data="Structure"),
-        InlineKeyboardButton("⚡ MEP", callback_data="MEP"),
-    ]]
-    await update.message.reply_text("Step 7/13\n\n🔧 Select *Type of Work*:", parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(kb))
-    return ASK_WORKTYPE
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    kb = [[InlineKeyboardButton(label, callback_data=f"work:{val}") for label, val in WORKTYPES]]
+    await edit_or_send(
+        update, ctx,
+        f"Defect noted ✅\n\n{progress_bar(7)}\n\nSelect *Type of Work*:",
+        InlineKeyboardMarkup(kb)
+    )
+    return PICK_WORKTYPE
 
-async def worktype_chosen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    ctx.user_data["worktype"] = query.data
-    await query.edit_message_text(f"Work Type: *{query.data}* ✅\n\nStep 8/13\n\nEnter *Vendor / SubCon* name:\n_(e.g. ឡាច ពៅ, NIPPON, Dulux)_", parse_mode="Markdown")
-    return ASK_VENDOR
+async def pick_worktype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    ctx.user_data["worktype"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Work Type: *{val}* ✅\n\n{progress_bar(8)}\n\nSelect *Vendor / SubCon*:",
+        grid_buttons(VENDORS, "vendor", per_row=2)
+    )
+    return PICK_VENDOR
 
-async def ask_supervisor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def pick_vendor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(8)}\n\n✏️ Type the *Vendor / SubCon* name:")
+        return PICK_VENDOR
+    ctx.user_data["vendor"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Vendor: *{val}* ✅\n\n{progress_bar(9)}\n\nSelect *Supervisor In Charge*:",
+        grid_buttons(SUPERVISORS, "sup")
+    )
+    return PICK_SUPERVISOR
+
+async def text_fallback_vendor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["vendor"] = update.message.text.strip()
-    await update.message.reply_text("Step 9/13\n\nEnter *Supervisor In Charge* code:\n_(e.g. C103, C33, C39, E20)_", parse_mode="Markdown")
-    return ASK_SUPERVISOR
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"Vendor: *{ctx.user_data['vendor']}* ✅\n\n{progress_bar(9)}\n\nSelect *Supervisor In Charge*:",
+        grid_buttons(SUPERVISORS, "sup")
+    )
+    return PICK_SUPERVISOR
 
-async def ask_engineer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def pick_supervisor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(9)}\n\n✏️ Type the *Supervisor* code:")
+        return PICK_SUPERVISOR
+    ctx.user_data["supervisor"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Supervisor: *{val}* ✅\n\n{progress_bar(10)}\n\nSelect *Site Engineer*:",
+        grid_buttons(ENGINEERS, "eng")
+    )
+    return PICK_ENGINEER
+
+async def text_fallback_supervisor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["supervisor"] = update.message.text.strip()
-    await update.message.reply_text("Step 10/13\n\nEnter *Site Engineer In Charge* code:\n_(e.g. C64, C118, M21, E83)_", parse_mode="Markdown")
-    return ASK_ENGINEER
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"Supervisor: *{ctx.user_data['supervisor']}* ✅\n\n{progress_bar(10)}\n\nSelect *Site Engineer*:",
+        grid_buttons(ENGINEERS, "eng")
+    )
+    return PICK_ENGINEER
 
-async def ask_raised(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def pick_engineer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(10)}\n\n✏️ Type the *Site Engineer* code:")
+        return PICK_ENGINEER
+    ctx.user_data["engineer"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Engineer: *{val}* ✅\n\n{progress_bar(11)}\n\nSelect *Defect Raised By* (QAQC code):",
+        grid_buttons(RAISED_BY, "raised")
+    )
+    return PICK_RAISED
+
+async def text_fallback_engineer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["engineer"] = update.message.text.strip()
-    await update.message.reply_text("Step 11/13\n\nEnter *Defect Raised By* (QAQC code):\n_(e.g. Q21, Q22, Q26)_", parse_mode="Markdown")
-    return ASK_RAISED
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"Engineer: *{ctx.user_data['engineer']}* ✅\n\n{progress_bar(11)}\n\nSelect *Defect Raised By* (QAQC code):",
+        grid_buttons(RAISED_BY, "raised")
+    )
+    return PICK_RAISED
 
-async def ask_photo_before(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def pick_raised(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(11)}\n\n✏️ Type the *QAQC code*:")
+        return PICK_RAISED
+    ctx.user_data["raised"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Raised by: *{val}* ✅\n\n{progress_bar(12)}\n\n📷 Send the *BEFORE photo* now\n_(or tap Skip)_",
+        InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo", callback_data="skip:before")]])
+    )
+    return PHOTO_BEFORE
+
+async def text_fallback_raised(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["raised"] = update.message.text.strip()
-    await update.message.reply_text(
-        "Step 12/13\n\n📷 Send *BEFORE photo* of the defect:\n_(Or type - to skip)_",
-        parse_mode="Markdown"
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"Raised by: *{ctx.user_data['raised']}* ✅\n\n{progress_bar(12)}\n\n📷 Send the *BEFORE photo* now\n_(or tap Skip)_",
+        InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo", callback_data="skip:before")]])
     )
-    return ASK_PHOTO_BEFORE
+    return PHOTO_BEFORE
 
-async def receive_photo_before(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        path = await save_photo(update.get_bot(), file_id, "before")
-        ctx.user_data["photo_before_path"] = path
-        await update.message.reply_text("✅ BEFORE photo saved!")
-    else:
-        ctx.user_data["photo_before_path"] = ""
-    await update.message.reply_text(
-        "Step 13/13\n\n📷 Send *AFTER photo* (if repair done):\n_(Or type - to skip)_",
-        parse_mode="Markdown"
+async def photo_before_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    ctx.user_data["photo_before_url"] = ""
+    await edit_or_send(
+        update, ctx,
+        f"{progress_bar(13)}\n\n📷 Send the *AFTER photo* (if already fixed)\n_(or tap Skip)_",
+        InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo", callback_data="skip:after")]])
     )
-    return ASK_PHOTO_AFTER
+    return PHOTO_AFTER
 
-async def receive_photo_after(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        path = await save_photo(update.get_bot(), file_id, "after")
-        ctx.user_data["photo_after_path"] = path
-        await update.message.reply_text("✅ AFTER photo saved!")
-    else:
-        ctx.user_data["photo_after_path"] = ""
-    await update.message.reply_text(
-        "💬 Add a *comment* for the team:\n_(Or type - to skip)_",
-        parse_mode="Markdown"
+async def photo_before_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    file_id = update.message.photo[-1].file_id
+    url = await get_photo_url(update.get_bot(), file_id)
+    ctx.user_data["photo_before_url"] = url
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"📷 BEFORE photo received ✅\n\n{progress_bar(13)}\n\n📷 Send the *AFTER photo* (if already fixed)\n_(or tap Skip)_",
+        InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo", callback_data="skip:after")]])
     )
-    return ASK_COMMENT
+    return PHOTO_AFTER
 
-async def ask_confirm(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def photo_after_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    ctx.user_data["photo_after_url"] = ""
+    await edit_or_send(
+        update, ctx,
+        f"{progress_bar(13)}\n\n💬 Add a *comment* for the team:\n_(or type - to skip)_"
+    )
+    return TYPE_COMMENT
+
+async def photo_after_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    file_id = update.message.photo[-1].file_id
+    url = await get_photo_url(update.get_bot(), file_id)
+    ctx.user_data["photo_after_url"] = url
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        f"✅ AFTER photo received ✅\n\n{progress_bar(13)}\n\n💬 Add a *comment* for the team:\n_(or type - to skip)_"
+    )
+    return TYPE_COMMENT
+
+async def type_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val = update.message.text.strip()
     ctx.user_data["comment"] = "" if val == "-" else val
     ctx.user_data["comment_type"] = "1"
-
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
     kb = [[
-        InlineKeyboardButton("✅ Confirm & Save", callback_data="confirm"),
-        InlineKeyboardButton("❌ Cancel", callback_data="cancel_report"),
+        InlineKeyboardButton("✅ Confirm & Save", callback_data="confirm:yes"),
+        InlineKeyboardButton("❌ Cancel", callback_data="confirm:no"),
     ]]
-    await update.message.reply_text(
+    await edit_or_send(
+        update, ctx,
         summary_text(ctx.user_data) + "\n\nSave this report?",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(kb)
+        InlineKeyboardMarkup(kb)
     )
     return CONFIRM
 
 async def confirm_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.data == "confirm":
+    q = update.callback_query
+    await q.answer()
+    if q.data == "confirm:yes":
         init_excel()
         report_no = save_to_excel(ctx.user_data)
-        await query.edit_message_text(
+        await q.edit_message_text(
             f"✅ *Report #{report_no} saved!*\n\n"
             + summary_text(ctx.user_data, report_no)
             + "\n\n📊 Use /export to download the Excel file.",
             parse_mode="Markdown"
         )
     else:
-        await query.edit_message_text("❌ Report cancelled.")
+        await q.edit_message_text("❌ Report cancelled.")
     ctx.user_data.clear()
     return ConversationHandler.END
 
 # ─────────────────────────────────────────────
-# /UPDATE CONVERSATION
+# /UPDATE — button-driven
 # ─────────────────────────────────────────────
 async def update_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    ctx.user_data.clear()
     reports = get_all_reports()
     open_reports = [r for r in reports if r["status"] != "Closed"]
     if not open_reports:
         await update.message.reply_text("✅ No open defects found.")
         return ConversationHandler.END
+
+    kb_rows, row = [], []
+    for i, r in enumerate(open_reports[-15:], 1):
+        row.append(InlineKeyboardButton(f"#{r['no']}", callback_data=f"updsel:{r['no']}"))
+        if i % 5 == 0:
+            kb_rows.append(row); row = []
+    if row:
+        kb_rows.append(row)
+
     lines = "\n".join([
-        f"{status_emoji(r['status'])} *#{r['no']}* — Zone {r['zone']}/Blk {r['block']} — {str(r['action'])[:40]}..."
+        f"{status_emoji(r['status'])} *#{r['no']}* — Z{r['zone']}/B{r['block']} — {str(r['action'])[:35]}..."
         for r in open_reports[-15:]
     ])
-    await update.message.reply_text(
-        f"📋 *Open Defects:*\n{lines}\n\nType the *Report Number* to update:",
-        parse_mode="Markdown"
+    sent = await update.message.reply_text(
+        f"📋 *Open Defects:*\n{lines}\n\nTap a report number to update:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(kb_rows)
     )
+    ctx.user_data["flow_msg_id"] = sent.message_id
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
     return UPD_SELECT
 
 async def upd_select(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    try:
-        ctx.user_data["upd_no"] = int(update.message.text.strip().lstrip("#"))
-    except ValueError:
-        await update.message.reply_text("❌ Invalid number. Try again or /cancel")
-        return UPD_SELECT
+    q = update.callback_query
+    await q.answer()
+    ctx.user_data["upd_no"] = int(q.data.split(":", 1)[1])
     kb = [[
-        InlineKeyboardButton("🟡 Open", callback_data="Open"),
-        InlineKeyboardButton("🔵 In Progress", callback_data="In Progress"),
-        InlineKeyboardButton("🟢 Closed", callback_data="Closed"),
+        InlineKeyboardButton("🟡 Open", callback_data="updstat:Open"),
+        InlineKeyboardButton("🔵 In Progress", callback_data="updstat:In Progress"),
+        InlineKeyboardButton("🟢 Closed", callback_data="updstat:Closed"),
     ]]
-    await update.message.reply_text(
+    await edit_or_send(
+        update, ctx,
         f"Report #{ctx.user_data['upd_no']} — Select new *Status*:",
-        parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(kb)
+        InlineKeyboardMarkup(kb)
     )
     return UPD_STATUS
 
 async def upd_status_chosen(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    ctx.user_data["upd_status"] = query.data
-    await query.edit_message_text(
-        f"Status: *{query.data}* ✅\n\nDescribe what was done to fix the defect:\n_(Or type - to skip)_",
-        parse_mode="Markdown"
+    q = update.callback_query
+    await q.answer()
+    ctx.user_data["upd_status"] = q.data.split(":", 1)[1]
+    await edit_or_send(
+        update, ctx,
+        f"Status: *{ctx.user_data['upd_status']}* ✅\n\n💬 Describe what was done to fix the defect:\n_(or type - to skip)_"
     )
     return UPD_COMMENT
 
 async def upd_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val = update.message.text.strip()
     ctx.user_data["upd_comment"] = "" if val == "-" else val
-    await update.message.reply_text(
-        "📷 Send *AFTER photo* (completion proof):\n_(Or type - to skip)_",
-        parse_mode="Markdown"
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await edit_or_send(
+        update, ctx,
+        "📷 Send the *AFTER photo* (completion proof)\n_(or tap Skip)_",
+        InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo", callback_data="updskip:1")]])
     )
     return UPD_PHOTO
 
-async def upd_photo(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    photo_path = ""
-    if update.message.photo:
-        file_id = update.message.photo[-1].file_id
-        photo_path = await save_photo(update.get_bot(), file_id, f"after_upd{ctx.user_data['upd_no']}")
+async def upd_photo_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await finish_update(update, ctx, "")
+    return ConversationHandler.END
 
+async def upd_photo_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    file_id = update.message.photo[-1].file_id
+    url = await get_photo_url(update.get_bot(), file_id)
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+    await finish_update(update, ctx, url)
+    return ConversationHandler.END
+
+async def finish_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE, photo_url: str):
     update_excel_status(
         ctx.user_data["upd_no"],
         ctx.user_data["upd_status"],
         ctx.user_data["upd_comment"],
-        photo_path
+        photo_url
     )
-    await update.message.reply_text(
+    text = (
         f"✅ *Report #{ctx.user_data['upd_no']} updated!*\n"
         f"Status → {status_emoji(ctx.user_data['upd_status'])} *{ctx.user_data['upd_status']}*\n"
-        f"Comment: {ctx.user_data['upd_comment'] or '—'}",
-        parse_mode="Markdown"
+        f"Comment: {ctx.user_data['upd_comment'] or '—'}"
     )
+    await edit_or_send(update, ctx, text)
     ctx.user_data.clear()
-    return ConversationHandler.END
 
 # ─────────────────────────────────────────────
 # /LIST & /EXPORT
@@ -493,7 +764,7 @@ async def list_reports(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"📊 *GPPC QAQC Report Summary*\n"
         f"Total: {len(reports)} | 🟡 Open: {open_c} | 🔵 Progress: {prog_c} | 🟢 Closed: {close_c}\n"
-        f"{'─'*30}\n" + "\n".join(lines),
+        f"{'─'*28}\n" + "\n".join(lines),
         parse_mode="Markdown"
     )
 
@@ -516,9 +787,6 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
-# ─────────────────────────────────────────────
 # KEEP-ALIVE SERVER (prevents Render from sleeping)
 # ─────────────────────────────────────────────
 class KeepAliveHandler(BaseHTTPRequestHandler):
@@ -527,7 +795,7 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"GPPC QAQC Bot is alive!")
     def log_message(self, format, *args):
-        pass  # suppress logs
+        pass
 
 def keep_alive():
     port = int(os.environ.get("PORT", 8080))
@@ -537,53 +805,54 @@ def keep_alive():
     thread.start()
     print(f"🌐 Keep-alive server running on port {port}")
 
+# ─────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────
 def main():
     init_excel()
-    os.makedirs(PHOTO_DIR, exist_ok=True)
-    keep_alive()  # Start web server so Render stays awake
+    keep_alive()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # /report conversation
     report_conv = ConversationHandler(
         entry_points=[CommandHandler("report", report_start)],
         states={
-            ASK_ZONE:         [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_block)],
-            ASK_BLOCK:        [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_unit)],
-            ASK_UNIT:         [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_floor)],
-            ASK_FLOOR:        [CallbackQueryHandler(floor_chosen)],
-            ASK_HTYPE:        [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_action)],
-            ASK_ACTION:       [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_worktype)],
-            ASK_WORKTYPE:     [CallbackQueryHandler(worktype_chosen)],
-            ASK_VENDOR:       [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_supervisor)],
-            ASK_SUPERVISOR:   [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_engineer)],
-            ASK_ENGINEER:     [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_raised)],
-            ASK_RAISED:       [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_photo_before)],
-            ASK_PHOTO_BEFORE: [
-                MessageHandler(filters.PHOTO, receive_photo_before),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_photo_before),
-            ],
-            ASK_PHOTO_AFTER:  [
-                MessageHandler(filters.PHOTO, receive_photo_after),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, receive_photo_after),
-            ],
-            ASK_COMMENT:      [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_confirm)],
-            CONFIRM:          [CallbackQueryHandler(confirm_report)],
+            PICK_ZONE:       [CallbackQueryHandler(pick_zone, pattern="^zone:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_zone)],
+            PICK_BLOCK:      [CallbackQueryHandler(pick_block, pattern="^block:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_block)],
+            TYPE_UNIT:       [MessageHandler(filters.TEXT & ~filters.COMMAND, type_unit)],
+            PICK_FLOOR:      [CallbackQueryHandler(pick_floor, pattern="^floor:")],
+            PICK_HTYPE:      [CallbackQueryHandler(pick_htype, pattern="^htype:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_htype)],
+            TYPE_ACTION:     [MessageHandler(filters.TEXT & ~filters.COMMAND, type_action)],
+            PICK_WORKTYPE:   [CallbackQueryHandler(pick_worktype, pattern="^work:")],
+            PICK_VENDOR:     [CallbackQueryHandler(pick_vendor, pattern="^vendor:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_vendor)],
+            PICK_SUPERVISOR: [CallbackQueryHandler(pick_supervisor, pattern="^sup:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_supervisor)],
+            PICK_ENGINEER:   [CallbackQueryHandler(pick_engineer, pattern="^eng:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_engineer)],
+            PICK_RAISED:     [CallbackQueryHandler(pick_raised, pattern="^raised:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_raised)],
+            PHOTO_BEFORE:    [CallbackQueryHandler(photo_before_skip, pattern="^skip:before"),
+                               MessageHandler(filters.PHOTO, photo_before_received)],
+            PHOTO_AFTER:     [CallbackQueryHandler(photo_after_skip, pattern="^skip:after"),
+                               MessageHandler(filters.PHOTO, photo_after_received)],
+            TYPE_COMMENT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, type_comment)],
+            CONFIRM:         [CallbackQueryHandler(confirm_report, pattern="^confirm:")],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
 
-    # /update conversation
     update_conv = ConversationHandler(
         entry_points=[CommandHandler("update", update_start)],
         states={
-            UPD_SELECT:  [MessageHandler(filters.TEXT & ~filters.COMMAND, upd_select)],
-            UPD_STATUS:  [CallbackQueryHandler(upd_status_chosen)],
+            UPD_SELECT:  [CallbackQueryHandler(upd_select, pattern="^updsel:")],
+            UPD_STATUS:  [CallbackQueryHandler(upd_status_chosen, pattern="^updstat:")],
             UPD_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, upd_comment)],
-            UPD_PHOTO:   [
-                MessageHandler(filters.PHOTO, upd_photo),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, upd_photo),
-            ],
+            UPD_PHOTO:   [CallbackQueryHandler(upd_photo_skip, pattern="^updskip:"),
+                          MessageHandler(filters.PHOTO, upd_photo_received)],
         },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
@@ -595,9 +864,8 @@ def main():
     app.add_handler(report_conv)
     app.add_handler(update_conv)
 
-    print("🤖 GPPC QAQC Bot is running...")
+    print("🤖 GPPC QAQC Bot is running (button mode)...")
     print(f"📁 Excel file: {EXCEL_FILE}")
-    print(f"📷 Photos saved to: {PHOTO_DIR}/")
     app.run_polling()
 
 if __name__ == "__main__":
