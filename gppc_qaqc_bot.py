@@ -18,6 +18,7 @@ Setup:
 """
 
 import os
+import io
 import logging
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -29,12 +30,15 @@ from telegram.ext import (
 )
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.drawing.image import Image as XLImage
+from PIL import Image as PILImage
 
 # ─────────────────────────────────────────────
 # CONFIG — Edit these before running
 # ─────────────────────────────────────────────
 BOT_TOKEN  = os.environ.get("BOT_TOKEN", "8660783157:AAF6Em-gZa0gEz8lynP8p5Z_9u7eCwJAZlc")
 EXCEL_FILE = "GPPC_QAQC_Reports.xlsx"
+PHOTO_DIR  = "qaqc_photos"  # temp local cache so we can embed thumbnails in Excel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -123,8 +127,10 @@ def save_to_excel(data: dict):
     status = data.get("status", "Open")
     fill = YELLOW_FILL if status == "Open" else GREEN_FILL if status == "Closed" else RED_FILL
 
-    before_url = data.get("photo_before_url", "")
-    after_url  = data.get("photo_after_url", "")
+    before_url   = data.get("photo_before_url", "")
+    after_url    = data.get("photo_after_url", "")
+    before_local = data.get("photo_before_local", "")
+    after_local  = data.get("photo_after_local", "")
     row_data = [
         report_no,
         data.get("date", ""),
@@ -152,30 +158,46 @@ def save_to_excel(data: dict):
         cell.font = Font(name="Arial", size=10)
         cell.alignment = Alignment(vertical="center", wrap_text=True)
         cell.border = THIN_BORDER
-    for url, col_idx, label in [(before_url, 3, "📷 BEFORE"), (after_url, 4, "✅ AFTER")]:
-        if url:
-            cell = ws.cell(row=next_row, column=col_idx, value=label)
-            cell.hyperlink = url
-            cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
-            cell.fill = fill
-            cell.border = THIN_BORDER
-            cell.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[next_row].height = 18
+
+    # Embed actual photo thumbnails (fallback to clickable text link if embedding fails)
+    embedded_before = embed_photo_in_cell(ws, 3, next_row, before_local, before_url)
+    if not embedded_before and before_url:
+        cell = ws.cell(row=next_row, column=3, value="📷 BEFORE")
+        cell.hyperlink = before_url
+        cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+        cell.fill = fill
+        cell.border = THIN_BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    embedded_after = embed_photo_in_cell(ws, 4, next_row, after_local, after_url)
+    if not embedded_after and after_url:
+        cell = ws.cell(row=next_row, column=4, value="✅ AFTER")
+        cell.hyperlink = after_url
+        cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+        cell.fill = fill
+        cell.border = THIN_BORDER
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    if not embedded_before and not embedded_after:
+        ws.row_dimensions[next_row].height = 18
     wb.save(EXCEL_FILE)
     return report_no
 
-def update_excel_status(report_no: int, new_status: str, remark: str, photo_after_url: str):
+def update_excel_status(report_no: int, new_status: str, remark: str, photo_after_url: str, photo_after_local: str = ""):
     wb = openpyxl.load_workbook(EXCEL_FILE)
     ws = wb.active
     for row in ws.iter_rows(min_row=4):
         if row[0].value == report_no:
+            row_idx = row[0].row
             row[16].value = new_status
             row[18].value = remark
             if photo_after_url:
-                cell = row[3]
-                cell.value = "✅ AFTER"
-                cell.hyperlink = photo_after_url
-                cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+                embedded = embed_photo_in_cell(ws, 4, row_idx, photo_after_local, photo_after_url)
+                if not embedded:
+                    cell = row[3]
+                    cell.value = "✅ AFTER"
+                    cell.hyperlink = photo_after_url
+                    cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
             fill = GREEN_FILL if new_status == "Closed" else YELLOW_FILL
             for cell in row:
                 cell.fill = fill
@@ -243,6 +265,49 @@ def summary_text(d: dict, report_no=None) -> str:
 async def get_photo_url(bot, file_id: str) -> str:
     f = await bot.get_file(file_id)
     return f.file_path
+
+async def download_photo(bot, file_id: str, label: str) -> str:
+    """Download a Telegram photo to local disk and return its path (for Excel embedding)."""
+    os.makedirs(PHOTO_DIR, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S%f")
+    path = os.path.join(PHOTO_DIR, f"{label}_{ts}.jpg")
+    f = await bot.get_file(file_id)
+    await f.download_to_drive(path)
+    return path
+
+def make_thumbnail(src_path: str, max_size=(160, 120)) -> str:
+    """Resize a photo down to a small thumbnail for embedding in Excel. Returns thumb path."""
+    try:
+        img = PILImage.open(src_path)
+        img.thumbnail(max_size)
+        thumb_path = src_path.replace(".jpg", "_thumb.jpg")
+        img.convert("RGB").save(thumb_path, "JPEG", quality=80)
+        return thumb_path
+    except Exception as e:
+        logger.warning(f"Thumbnail failed: {e}")
+        return src_path
+
+def embed_photo_in_cell(ws, col_idx: int, row_idx: int, local_path: str, hyperlink_url: str = ""):
+    """Embed a photo thumbnail into a specific Excel cell, with optional click-through hyperlink."""
+    if not local_path or not os.path.exists(local_path):
+        return False
+    try:
+        thumb = make_thumbnail(local_path)
+        img = XLImage(thumb)
+        img.width = 90
+        img.height = 70
+        col_letter = openpyxl.utils.get_column_letter(col_idx)
+        img.anchor = f"{col_letter}{row_idx}"
+        ws.add_image(img)
+        if hyperlink_url:
+            cell = ws.cell(row=row_idx, column=col_idx)
+            cell.hyperlink = hyperlink_url
+        ws.row_dimensions[row_idx].height = 56
+        ws.column_dimensions[col_letter].width = 14
+        return True
+    except Exception as e:
+        logger.warning(f"Embed photo failed: {e}")
+        return False
 
 async def edit_or_send(update: Update, ctx, text, reply_markup=None):
     """Edit the tracked message if possible, else send new and track it."""
@@ -567,6 +632,7 @@ async def photo_before_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     file_id = update.message.photo[-1].file_id
     url = await get_photo_url(update.get_bot(), file_id)
     ctx.user_data["photo_before_url"] = url
+    ctx.user_data["photo_before_local"] = await download_photo(update.get_bot(), file_id, "before")
     try:
         await update.message.delete()
     except Exception:
@@ -592,6 +658,7 @@ async def photo_after_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     file_id = update.message.photo[-1].file_id
     url = await get_photo_url(update.get_bot(), file_id)
     ctx.user_data["photo_after_url"] = url
+    ctx.user_data["photo_after_local"] = await download_photo(update.get_bot(), file_id, "after")
     try:
         await update.message.delete()
     except Exception:
@@ -716,25 +783,27 @@ async def upd_comment(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def upd_photo_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    await finish_update(update, ctx, "")
+    await finish_update(update, ctx, "", "")
     return ConversationHandler.END
 
 async def upd_photo_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     file_id = update.message.photo[-1].file_id
     url = await get_photo_url(update.get_bot(), file_id)
+    local_path = await download_photo(update.get_bot(), file_id, f"after_upd{ctx.user_data.get('upd_no','x')}")
     try:
         await update.message.delete()
     except Exception:
         pass
-    await finish_update(update, ctx, url)
+    await finish_update(update, ctx, url, local_path)
     return ConversationHandler.END
 
-async def finish_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE, photo_url: str):
+async def finish_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE, photo_url: str, photo_local: str = ""):
     update_excel_status(
         ctx.user_data["upd_no"],
         ctx.user_data["upd_status"],
         ctx.user_data["upd_comment"],
-        photo_url
+        photo_url,
+        photo_local
     )
     text = (
         f"✅ *Report #{ctx.user_data['upd_no']} updated!*\n"
