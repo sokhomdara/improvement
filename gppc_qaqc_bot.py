@@ -861,8 +861,13 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 class KeepAliveHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"GPPC QAQC Bot is alive!")
+        self.wfile.write(b"GPPC QAQC Bot is alive! Status: OK")
+    def do_HEAD(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
     def log_message(self, format, *args):
         pass
 
@@ -878,8 +883,8 @@ def keep_alive():
 # MAIN
 # ─────────────────────────────────────────────
 def main():
+    keep_alive()  # Start web server FIRST so Render health check passes immediately
     init_excel()
-    keep_alive()
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
