@@ -194,13 +194,14 @@ def update_excel_status(report_no: int, new_status: str, remark: str, photo_afte
             if photo_after_url:
                 embedded = embed_photo_in_cell(ws, 4, row_idx, photo_after_local, photo_after_url)
                 if not embedded:
-                    cell = row[3]
-                    cell.value = "✅ AFTER"
+                    # col index 4 = column D = Picture After
+                    cell = ws.cell(row=row_idx, column=4, value="✅ AFTER")
                     cell.hyperlink = photo_after_url
                     cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
             fill = GREEN_FILL if new_status == "Closed" else YELLOW_FILL
-            for cell in row:
-                cell.fill = fill
+            for r_cell in ws[row_idx]:
+                r_cell.fill = fill
             break
     wb.save(EXCEL_FILE)
 
