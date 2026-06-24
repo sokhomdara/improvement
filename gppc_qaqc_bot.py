@@ -382,13 +382,12 @@ async def restart_bot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Only admins can restart the bot.")
         return
     await update.message.reply_text(
-        "🔄 *Restarting bot...* \n"
-        "Bot will be back in 5 seconds!",
+        "🔄 *Restarting bot...* \nBot will be back in 10 seconds!",
         parse_mode="Markdown"
     )
-    import sys
-    import subprocess
-    subprocess.Popen([sys.executable] + sys.argv)
+    # Stop polling cleanly then exit — Render will auto-restart the process
+    await ctx.application.stop()
+    await ctx.application.shutdown()
     os._exit(0)
 
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
