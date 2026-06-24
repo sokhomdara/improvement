@@ -159,27 +159,25 @@ def save_to_excel(data: dict):
         cell.alignment = Alignment(vertical="center", wrap_text=True)
         cell.border = THIN_BORDER
 
-    # Embed actual photo thumbnails (fallback to clickable text link if embedding fails)
-    embedded_before = embed_photo_in_cell(ws, 3, next_row, before_local, before_url)
-    if not embedded_before and before_url:
-        cell = ws.cell(row=next_row, column=3, value="📷 BEFORE")
-        cell.hyperlink = before_url
-        cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
-        cell.fill = fill
-        cell.border = THIN_BORDER
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    embedded_after = embed_photo_in_cell(ws, 4, next_row, after_local, after_url)
-    if not embedded_after and after_url:
-        cell = ws.cell(row=next_row, column=4, value="✅ AFTER")
-        cell.hyperlink = after_url
-        cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
-        cell.fill = fill
-        cell.border = THIN_BORDER
-        cell.alignment = Alignment(horizontal="center", vertical="center")
-
-    if not embedded_before and not embedded_after:
-        ws.row_dimensions[next_row].height = 18
+    # Save photos: always write clickable link first, then try thumbnail on top
+    for url, local, col_idx, label in [
+        (before_url, before_local, 3, "📷 BEFORE"),
+        (after_url,  after_local,  4, "✅ AFTER"),
+    ]:
+        if url:
+            cell = ws.cell(row=next_row, column=col_idx, value=label)
+            cell.hyperlink = url
+            cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+            cell.fill = fill
+            cell.border = THIN_BORDER
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+            # Try to embed thumbnail on top if local file exists
+            if local and os.path.exists(local):
+                try:
+                    embed_photo_in_cell(ws, col_idx, next_row, local, url)
+                except Exception:
+                    pass
+    ws.row_dimensions[next_row].height = 18
     wb.save(EXCEL_FILE)
     return report_no
 
@@ -192,13 +190,18 @@ def update_excel_status(report_no: int, new_status: str, remark: str, photo_afte
             row[16].value = new_status
             row[18].value = remark
             if photo_after_url:
-                embedded = embed_photo_in_cell(ws, 4, row_idx, photo_after_local, photo_after_url)
-                if not embedded:
-                    # col index 4 = column D = Picture After
-                    cell = ws.cell(row=row_idx, column=4, value="✅ AFTER")
-                    cell.hyperlink = photo_after_url
-                    cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
-                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                # Always save as clickable link (reliable on cloud hosting)
+                cell = ws.cell(row=row_idx, column=4, value="✅ AFTER")
+                cell.hyperlink = photo_after_url
+                cell.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+                cell.border = THIN_BORDER
+                # Also try to embed thumbnail if local file exists
+                if photo_after_local and os.path.exists(photo_after_local):
+                    try:
+                        embed_photo_in_cell(ws, 4, row_idx, photo_after_local, photo_after_url)
+                    except Exception:
+                        pass
             fill = GREEN_FILL if new_status == "Closed" else YELLOW_FILL
             for r_cell in ws[row_idx]:
                 r_cell.fill = fill
