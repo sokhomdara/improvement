@@ -339,6 +339,9 @@ async def edit_or_send(update: Update, ctx, text, reply_markup=None):
 # ─────────────────────────────────────────────
 # /START & /HELP
 # ─────────────────────────────────────────────
+# 5756119542 user IDs who can use /restart (add your Telegram user ID here)
+ADMIN_IDS = [5756119542]  # Replace with your actual Telegram user ID
+
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 *GPPC QAQC Bot* is ready!\n\n"
@@ -347,9 +350,42 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• /update — Update defect status\n"
         "• /list — View all open defects\n"
         "• /export — Get Excel report file\n"
+        "• /ping — Check if bot is alive\n"
+        "• /restart — Restart the bot\n"
         "• /cancel — Cancel current action",
         parse_mode="Markdown"
     )
+
+async def ping(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Check if bot is alive and responding."""
+    now = datetime.now().strftime("%d %b %Y %H:%M:%S")
+    reports = get_all_reports()
+    total = len(reports)
+    open_c = sum(1 for r in reports if r["status"] == "Open")
+    closed_c = sum(1 for r in reports if r["status"] == "Closed")
+    await update.message.reply_text(
+        f"🟢 *Bot is ALIVE!*\n"
+        f"⏰ Server time: {now}\n"
+        f"📊 Reports: {total} total | 🟡 {open_c} open | 🟢 {closed_c} closed\n"
+        f"✅ All systems running normally!",
+        parse_mode="Markdown"
+    )
+
+async def restart_bot(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Restart the bot process — admin only."""
+    user_id = update.effective_user.id
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Only admins can restart the bot.")
+        return
+    await update.message.reply_text(
+        "🔄 *Restarting bot...* \n"
+        "Bot will be back in 5 seconds!",
+        parse_mode="Markdown"
+    )
+    import sys
+    import subprocess
+    subprocess.Popen([sys.executable] + sys.argv)
+    os._exit(0)
 
 async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await start(update, ctx)
@@ -935,6 +971,8 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CommandHandler("list", list_reports))
     app.add_handler(CommandHandler("export", export_excel))
+    app.add_handler(CommandHandler("ping", ping))
+    app.add_handler(CommandHandler("restart", restart_bot))
     app.add_handler(report_conv)
     app.add_handler(update_conv)
 
