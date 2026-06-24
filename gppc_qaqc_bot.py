@@ -36,7 +36,7 @@ from PIL import Image as PILImage
 # ─────────────────────────────────────────────
 # CONFIG — Edit these before running
 # ─────────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN", "8660783157:AAF6Em-gZa0gEz8lynP8p5Z_9u7eCwJAZlc")
+BOT_TOKEN  = os.environ.get("BOT_TOKEN", "8660783157:AAEBEb_O-z514MdZspps0rp-IH4yg3cz4NM")
 EXCEL_FILE = "GPPC_QAQC_Reports.xlsx"
 PHOTO_DIR  = "qaqc_photos"  # temp local cache so we can embed thumbnails in Excel
 
