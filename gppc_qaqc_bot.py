@@ -339,8 +339,8 @@ async def edit_or_send(update: Update, ctx, text, reply_markup=None):
 # ─────────────────────────────────────────────
 # /START & /HELP
 # ─────────────────────────────────────────────
-# 5756119542 user IDs who can use /restart (add your Telegram user ID here)
-ADMIN_IDS = [5756119542]  # Replace with your actual Telegram user ID
+# Admin user IDs who can use /restart (add your Telegram user ID here)
+ADMIN_IDS = [352178789]  # Dara SOKHOM - GPPC QAQC Admin
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
