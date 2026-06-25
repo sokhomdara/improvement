@@ -842,12 +842,37 @@ async def finish_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE, photo_ur
         photo_url,
         photo_local
     )
+    report_no   = ctx.user_data["upd_no"]
+    new_status  = ctx.user_data["upd_status"]
+    comment     = ctx.user_data["upd_comment"] or "—"
+    chat_id     = update.effective_chat.id
+
     text = (
-        f"✅ *Report #{ctx.user_data['upd_no']} updated!*\n"
-        f"Status → {status_emoji(ctx.user_data['upd_status'])} *{ctx.user_data['upd_status']}*\n"
-        f"Comment: {ctx.user_data['upd_comment'] or '—'}"
+        f"✅ *Report #{report_no} updated!*\n"
+        f"Status → {status_emoji(new_status)} *{new_status}*\n"
+        f"💬 Comment: {comment}"
     )
+
+    # Edit the flow message to show summary
     await edit_or_send(update, ctx, text)
+
+    # Send AFTER photo separately so it's visible in the group
+    if photo_url:
+        try:
+            await ctx.bot.send_photo(
+                chat_id=chat_id,
+                photo=photo_url,
+                caption=f"✅ *AFTER photo — Report #{report_no}*\nStatus: {status_emoji(new_status)} {new_status}",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            # Fallback: send as document link
+            await ctx.bot.send_message(
+                chat_id=chat_id,
+                text=f"✅ AFTER photo: {photo_url}",
+                parse_mode="Markdown"
+            )
+
     ctx.user_data.clear()
 
 # ─────────────────────────────────────────────
