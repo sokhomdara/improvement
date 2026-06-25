@@ -267,8 +267,16 @@ def summary_text(d: dict, report_no=None) -> str:
     )
 
 async def get_photo_url(bot, file_id: str) -> str:
-    f = await bot.get_file(file_id)
-    return f.file_path
+    """Return the file_id itself — best for re-sending photos via Telegram API."""
+    return file_id  # file_id works directly with send_photo
+
+async def get_photo_full_url(bot, file_id: str) -> str:
+    """Return full https URL — for Excel hyperlinks."""
+    try:
+        f = await bot.get_file(file_id)
+        return f.file_path  # returns full https://api.telegram.org/file/bot.../photo.jpg
+    except Exception:
+        return ""
 
 async def download_photo(bot, file_id: str, label: str) -> str:
     """Download a Telegram photo to local disk and return its path (for Excel embedding)."""
@@ -668,8 +676,7 @@ async def photo_before_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def photo_before_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     file_id = update.message.photo[-1].file_id
-    url = await get_photo_url(update.get_bot(), file_id)
-    ctx.user_data["photo_before_url"] = url
+    ctx.user_data["photo_before_url"] = await get_photo_full_url(update.get_bot(), file_id)
     ctx.user_data["photo_before_local"] = await download_photo(update.get_bot(), file_id, "before")
     try:
         await update.message.delete()
@@ -825,13 +832,14 @@ async def upd_photo_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def upd_photo_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     file_id = update.message.photo[-1].file_id
-    url = await get_photo_url(update.get_bot(), file_id)
+    full_url = await get_photo_full_url(update.get_bot(), file_id)
     local_path = await download_photo(update.get_bot(), file_id, f"after_upd{ctx.user_data.get('upd_no','x')}")
+    ctx.user_data["upd_photo_file_id"] = file_id  # for sending photo in chat
     try:
         await update.message.delete()
     except Exception:
         pass
-    await finish_update(update, ctx, url, local_path)
+    await finish_update(update, ctx, full_url, local_path)
     return ConversationHandler.END
 
 async def finish_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE, photo_url: str, photo_local: str = ""):
@@ -857,21 +865,17 @@ async def finish_update(update: Update, ctx: ContextTypes.DEFAULT_TYPE, photo_ur
     await edit_or_send(update, ctx, text)
 
     # Send AFTER photo separately so it's visible in the group
-    if photo_url:
+    file_id = ctx.user_data.get("upd_photo_file_id", "")
+    if file_id:
         try:
             await ctx.bot.send_photo(
                 chat_id=chat_id,
-                photo=photo_url,
+                photo=file_id,
                 caption=f"✅ *AFTER photo — Report #{report_no}*\nStatus: {status_emoji(new_status)} {new_status}",
                 parse_mode="Markdown"
             )
         except Exception:
-            # Fallback: send as document link
-            await ctx.bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ AFTER photo: {photo_url}",
-                parse_mode="Markdown"
-            )
+            pass
 
     ctx.user_data.clear()
 
