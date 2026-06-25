@@ -60,12 +60,12 @@ logger = logging.getLogger(__name__)
 ZONES        = ["16", "17", "18", "19", "20"]
 BLOCKS       = ["1", "2", "3", "8", "12"]
 FLOORS       = ["GF", "1F", "2F", "3F", "RF", "EX", "Exterior", "Underground"]
-HTYPES       = ["QNBII", "TWSE", "QNAG", "QN", "QBII"]
+HTYPES       = ["KG", "QNA", "QNBII", "TWSE", "LASII", "LBIII", "SHC"]
 WORKTYPES    = [("🪟 Finishing", "Finishing"), ("🏗️ Structure", "Structure"), ("⚡ MEP", "MEP")]
 VENDORS      = ["ឡាច ពៅ", "វ៉ាន់ សាគីន", "ថន ផល្លា", "Pholla", "NIPPON", "Dulux"]
-SUPERVISORS  = ["C103", "C33", "C39", "C63", "E20"]
-ENGINEERS    = ["C64", "C118", "M21", "C45", "E83"]
-RAISED_BY    = ["Q10", "Q21", "Q22", "Q26"]
+SUPERVISORS  = ["C32", "C16", "C45", "C63", "E6", "E20", "E22"]
+ENGINEERS    = ["C100", "C12", "C116", "C95", "C58", "C15", "C46", "C117", "C129", "C54", "C43", "C105", "C137", "C55", "C59", "C29", "C33", "C64", "C118", "C38", "M21", "C62"]
+RAISED_BY    = ["Q2", "Q3", "Q6", "Q7", "Q10", "Q11", "Q13", "Q16", "Q21", "Q26", "Q28"]
 
 # ─────────────────────────────────────────────
 # EXCEL SETUP
@@ -355,8 +355,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "• /list — View all open defects\n"
         "• /export — Get Excel report file\n"
         "• /ping — Check if bot is alive\n"
-        "• /restart — Restart the bot\n"
-        "• /cancel — Cancel current action",
+        "• /restart — Restart the bot (admin only)",
         parse_mode="Markdown"
     )
 
@@ -583,7 +582,7 @@ async def pick_supervisor(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await edit_or_send(
         update, ctx,
         f"Supervisor: *{val}* ✅\n\n{progress_bar(10)}\n\nSelect *Site Engineer*:",
-        grid_buttons(ENGINEERS, "eng")
+        grid_buttons(ENGINEERS, "eng", per_row=4)
     )
     return PICK_ENGINEER
 
@@ -596,7 +595,7 @@ async def text_fallback_supervisor(update: Update, ctx: ContextTypes.DEFAULT_TYP
     await edit_or_send(
         update, ctx,
         f"Supervisor: *{ctx.user_data['supervisor']}* ✅\n\n{progress_bar(10)}\n\nSelect *Site Engineer*:",
-        grid_buttons(ENGINEERS, "eng")
+        grid_buttons(ENGINEERS, "eng", per_row=4)
     )
     return PICK_ENGINEER
 
@@ -611,7 +610,7 @@ async def pick_engineer(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await edit_or_send(
         update, ctx,
         f"Engineer: *{val}* ✅\n\n{progress_bar(11)}\n\nSelect *Defect Raised By* (QAQC code):",
-        grid_buttons(RAISED_BY, "raised")
+        grid_buttons(RAISED_BY, "raised", per_row=4)
     )
     return PICK_RAISED
 
@@ -624,7 +623,7 @@ async def text_fallback_engineer(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     await edit_or_send(
         update, ctx,
         f"Engineer: *{ctx.user_data['engineer']}* ✅\n\n{progress_bar(11)}\n\nSelect *Defect Raised By* (QAQC code):",
-        grid_buttons(RAISED_BY, "raised")
+        grid_buttons(RAISED_BY, "raised", per_row=4)
     )
     return PICK_RAISED
 
@@ -660,12 +659,12 @@ async def photo_before_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     ctx.user_data["photo_before_url"] = ""
+    ctx.user_data["photo_before_local"] = ""
     await edit_or_send(
         update, ctx,
-        f"{progress_bar(13)}\n\n📷 Send the *AFTER photo* (if already fixed)\n_(or tap Skip)_",
-        InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo", callback_data="skip:after")]])
+        f"{progress_bar(13)}\n\n💬 Add a *comment* for the team:\n_(or type - to skip)_"
     )
-    return PHOTO_AFTER
+    return TYPE_COMMENT
 
 async def photo_before_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     file_id = update.message.photo[-1].file_id
@@ -678,10 +677,9 @@ async def photo_before_received(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pass
     await edit_or_send(
         update, ctx,
-        f"📷 BEFORE photo received ✅\n\n{progress_bar(13)}\n\n📷 Send the *AFTER photo* (if already fixed)\n_(or tap Skip)_",
-        InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo", callback_data="skip:after")]])
+        f"📷 BEFORE photo received ✅\n\n{progress_bar(13)}\n\n💬 Add a *comment* for the team:\n_(or type - to skip)_"
     )
-    return PHOTO_AFTER
+    return TYPE_COMMENT
 
 async def photo_after_skip(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -950,8 +948,6 @@ def main():
                                MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_raised)],
             PHOTO_BEFORE:    [CallbackQueryHandler(photo_before_skip, pattern="^skip:before"),
                                MessageHandler(filters.PHOTO, photo_before_received)],
-            PHOTO_AFTER:     [CallbackQueryHandler(photo_after_skip, pattern="^skip:after"),
-                               MessageHandler(filters.PHOTO, photo_after_received)],
             TYPE_COMMENT:    [MessageHandler(filters.TEXT & ~filters.COMMAND, type_comment)],
             CONFIRM:         [CallbackQueryHandler(confirm_report, pattern="^confirm:")],
         },
