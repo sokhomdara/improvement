@@ -57,15 +57,16 @@ logger = logging.getLogger(__name__)
 ) = range(19)
 
 # Preset quick-pick options (most-used values) — bot still allows custom text entry
-ZONES        = ["16", "17", "18", "19", "20"]
+ZONES        = [f"{i:02d}" for i in range(1, 51)]  # 01 to 50
 BLOCKS       = ["1", "2", "3", "8", "12"]
 FLOORS       = ["GF", "1F", "2F", "3F", "RF", "EX", "Exterior", "Underground"]
-HTYPES       = ["KG", "QNA", "QNBII", "TWSE", "LASII", "LBIII", "SHC"]
+HTYPES       = ["KG", "QN", "QNA", "QNBII", "TWSE", "LASII", "LBIII", "SHC"]
 WORKTYPES    = [("🪟 Finishing", "Finishing"), ("🏗️ Structure", "Structure"), ("⚡ MEP", "MEP")]
 VENDORS      = ["ឡាច ពៅ", "វ៉ាន់ សាគីន", "ថន ផល្លា", "Pholla", "NIPPON", "Dulux"]
 SUPERVISORS  = ["C32", "C16", "C45", "C63", "E6", "E20", "E22"]
 ENGINEERS    = ["C100", "C12", "C116", "C95", "C58", "C15", "C46", "C117", "C129", "C54", "C43", "C105", "C137", "C55", "C59", "C29", "C33", "C64", "C118", "C38", "M21", "C62"]
 RAISED_BY    = ["Q2", "Q3", "Q6", "Q7", "Q10", "Q11", "Q13", "Q16", "Q21", "Q26", "Q28"]
+HOUSE_NUMS   = [f"{i:02d}" for i in range(1, 201)]  # 01 to 200
 
 # ─────────────────────────────────────────────
 # EXCEL SETUP
@@ -252,7 +253,7 @@ def grid_buttons(options, prefix, per_row=3, custom=True):
 def summary_text(d: dict, report_no=None) -> str:
     no_str = f"#️⃣ Report No: *{report_no}*\n" if report_no else ""
     return (
-        f"📋 *GPPC QAQC DEFECT REPORT*\n"
+        f"📋 *QAQC DEFECT REPORT*\n"
         f"{'─'*28}\n"
         f"{no_str}"
         f"📅 {d.get('date','')}\n"
@@ -356,7 +357,7 @@ ADMIN_IDS = [352178789]  # Dara SOKHOM - GPPC QAQC Admin
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 *GPPC QAQC Bot* is ready!\n\n"
+        "👋 *QAQC Bot* is ready!\n\n"
         "Commands:\n"
         "• /report — Log a new defect\n"
         "• /update — Update defect status\n"
@@ -412,9 +413,9 @@ async def report_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
     sent = await update.effective_chat.send_message(
-        f"📋 *New Defect Report*\n{progress_bar(1)}\n\nSelect *Zone*:",
+        f"📋 *New Defect Report*\n{progress_bar(1)}\n\nSelect *Zone* (01–50):",
         parse_mode="Markdown",
-        reply_markup=grid_buttons(ZONES, "zone")
+        reply_markup=grid_buttons(ZONES, "zone", per_row=10, custom=False)
     )
     ctx.user_data["flow_msg_id"] = sent.message_id
     return PICK_ZONE
@@ -430,7 +431,7 @@ async def pick_zone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await edit_or_send(
         update, ctx,
         f"Zone: *{val}* ✅\n\n{progress_bar(2)}\n\nSelect *Block*:",
-        grid_buttons(BLOCKS, "block")
+        grid_buttons(BLOCKS, "block", per_row=5)
     )
     return PICK_BLOCK
 
@@ -443,7 +444,7 @@ async def text_fallback_zone(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await edit_or_send(
         update, ctx,
         f"Zone: *{ctx.user_data['zone']}* ✅\n\n{progress_bar(2)}\n\nSelect *Block*:",
-        grid_buttons(BLOCKS, "block")
+        grid_buttons(BLOCKS, "block", per_row=5)
     )
     return PICK_BLOCK
 
@@ -457,7 +458,8 @@ async def pick_block(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["block"] = val
     await edit_or_send(
         update, ctx,
-        f"Block: *{val}* ✅\n\n{progress_bar(3)}\n\n✏️ Type the *House / Unit number*:\n_(e.g. #38 — or type - to skip)_"
+        f"Block: *{val}* ✅\n\n{progress_bar(3)}\n\nSelect *House / Unit number* (01–200):",
+        grid_buttons(HOUSE_NUMS, "unit", per_row=10, custom=True)
     )
     return TYPE_UNIT
 
@@ -469,9 +471,26 @@ async def text_fallback_block(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pass
     await edit_or_send(
         update, ctx,
-        f"Block: *{ctx.user_data['block']}* ✅\n\n{progress_bar(3)}\n\n✏️ Type the *House / Unit number*:\n_(e.g. #38 — or type - to skip)_"
+        f"Block: *{ctx.user_data['block']}* ✅\n\n{progress_bar(3)}\n\nSelect *House / Unit number* (01–200):",
+        grid_buttons(HOUSE_NUMS, "unit", per_row=10, custom=True)
     )
     return TYPE_UNIT
+
+async def pick_unit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle unit button tap."""
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(3)}\n\n✏️ Type the *House / Unit number*:")
+        return TYPE_UNIT
+    ctx.user_data["unit"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Unit: *{val}* ✅\n\n{progress_bar(4)}\n\nSelect *Floor*:",
+        grid_buttons(FLOORS, "floor", per_row=4, custom=False)
+    )
+    return PICK_FLOOR
 
 async def type_unit(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     val = update.message.text.strip()
@@ -897,7 +916,7 @@ async def list_reports(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     prog_c  = sum(1 for r in reports if r["status"] == "In Progress")
     close_c = sum(1 for r in reports if r["status"] == "Closed")
     await update.message.reply_text(
-        f"📊 *GPPC QAQC Report Summary*\n"
+        f"📊 *QAQC Report Summary*\n"
         f"Total: {len(reports)} | 🟡 Open: {open_c} | 🔵 Progress: {prog_c} | 🟢 Closed: {close_c}\n"
         f"{'─'*28}\n" + "\n".join(lines),
         parse_mode="Markdown"
@@ -910,7 +929,7 @@ async def export_excel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_document(
         document=open(EXCEL_FILE, "rb"),
         filename=f"GPPC_QAQC_{datetime.now().strftime('%Y%m%d')}.xlsx",
-        caption=f"📊 GPPC Quality Monitoring Report\n{datetime.now().strftime('%d %b %Y %H:%M')}"
+        caption=f"📊 Quality Monitoring Report\n{datetime.now().strftime('%d %b %Y %H:%M')}"
     )
 
 # ─────────────────────────────────────────────
@@ -929,7 +948,7 @@ class KeepAliveHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"GPPC QAQC Bot is alive! Status: OK")
+        self.wfile.write(b"QAQC Bot is alive! Status: OK")
     def do_HEAD(self):
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
@@ -961,7 +980,8 @@ def main():
                                MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_zone)],
             PICK_BLOCK:      [CallbackQueryHandler(pick_block, pattern="^block:"),
                                MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_block)],
-            TYPE_UNIT:       [MessageHandler(filters.TEXT & ~filters.COMMAND, type_unit)],
+            TYPE_UNIT:       [CallbackQueryHandler(pick_unit, pattern="^unit:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, type_unit)],
             PICK_FLOOR:      [CallbackQueryHandler(pick_floor, pattern="^floor:")],
             PICK_HTYPE:      [CallbackQueryHandler(pick_htype, pattern="^htype:"),
                                MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_htype)],
@@ -1004,7 +1024,7 @@ def main():
     app.add_handler(report_conv)
     app.add_handler(update_conv)
 
-    print("🤖 GPPC QAQC Bot is running (button mode)...")
+    print("🤖 QAQC Bot is running (button mode)...")
     print(f"📁 Excel file: {EXCEL_FILE}")
     app.run_polling()
 
