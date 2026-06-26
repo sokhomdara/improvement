@@ -58,11 +58,22 @@ logger = logging.getLogger(__name__)
 
 # Preset quick-pick options (most-used values) — bot still allows custom text entry
 ZONES        = [f"{i:02d}" for i in range(1, 51)]  # 01 to 50
-BLOCKS       = ["1", "2", "3", "8", "12"]
+BLOCKS       = [f"{i:02d}" for i in range(1, 16)]  # 01 to 15
 FLOORS       = ["GF", "1F", "2F", "3F", "RF", "EX", "Exterior", "Underground"]
 HTYPES       = ["KG", "QN", "QNA", "QNBII", "TWSE", "LASII", "LBIII", "SHC"]
 WORKTYPES    = [("🪟 Finishing", "Finishing"), ("🏗️ Structure", "Structure"), ("⚡ MEP", "MEP")]
 VENDORS      = ["ឡាច ពៅ", "វ៉ាន់ សាគីន", "ថន ផល្លា", "Pholla", "NIPPON", "Dulux"]
+DEFECTS_FINISHING = [
+    "ឥដ្ឋប៉ោង", "ឥដ្ឋមិនពេញរ៉ង", "ជញ្ជាំងបូកប៉ោង",
+    "ជ្រុងមិនត្រង់", "សាច់បូកខ្លុក", "ការ៉ូខ្លុក",
+    "ការ៉ូបែក", "ម៉ាបបែក", "ថ្នាំមិនស្អាត"
+]
+DEFECTS_STRUCTURE = [
+    "បេតុងសសុះចេញដែក", "បេតុងប៉ោង", "តំទ្បើងដែកខុសប្លង់"
+]
+DEFECTS_MEP = [
+    "ទុយោលិច", "ឆ្លងភ្លើង"
+]
 SUPERVISORS  = ["C32", "C16", "C45", "C63", "E6", "E20", "E22"]
 ENGINEERS    = ["C100", "C12", "C116", "C95", "C58", "C15", "C46", "C117", "C129", "C54", "C43", "C105", "C137", "C55", "C59", "C29", "C33", "C64", "C118", "C38", "M21", "C62"]
 RAISED_BY    = ["Q2", "Q3", "Q6", "Q7", "Q10", "Q11", "Q13", "Q16", "Q21", "Q26", "Q28"]
@@ -526,11 +537,13 @@ async def pick_htype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await edit_or_send(update, ctx, f"{progress_bar(5)}\n\n✏️ Type the *House Type*:")
         return PICK_HTYPE
     ctx.user_data["htype"] = val
+    kb = [[InlineKeyboardButton(label, callback_data=f"work:{val2}") for label, val2 in WORKTYPES]]
     await edit_or_send(
         update, ctx,
-        f"House Type: *{val}* ✅\n\n{progress_bar(6)}\n\n✏️ Describe the *Defect / Action Required*:\n_(Khmer or English)_"
+        f"House Type: *{val}* ✅\n\n{progress_bar(6)}\n\nSelect *Type of Work*:",
+        InlineKeyboardMarkup(kb)
     )
-    return TYPE_ACTION
+    return PICK_WORKTYPE
 
 async def text_fallback_htype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ctx.user_data["htype"] = update.message.text.strip()
@@ -538,34 +551,59 @@ async def text_fallback_htype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.delete()
     except Exception:
         pass
+    kb = [[InlineKeyboardButton(label, callback_data=f"work:{val}") for label, val in WORKTYPES]]
     await edit_or_send(
         update, ctx,
-        f"House Type: *{ctx.user_data['htype']}* ✅\n\n{progress_bar(6)}\n\n✏️ Describe the *Defect / Action Required*:\n_(Khmer or English)_"
+        f"House Type: *{ctx.user_data['htype']}* ✅\n\n{progress_bar(6)}\n\nSelect *Type of Work*:",
+        InlineKeyboardMarkup(kb)
     )
-    return TYPE_ACTION
+    return PICK_WORKTYPE
 
 async def type_action(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    # Custom typed defect description
     ctx.user_data["action"] = update.message.text.strip()
     try:
         await update.message.delete()
     except Exception:
         pass
-    kb = [[InlineKeyboardButton(label, callback_data=f"work:{val}") for label, val in WORKTYPES]]
     await edit_or_send(
         update, ctx,
-        f"Defect noted ✅\n\n{progress_bar(7)}\n\nSelect *Type of Work*:",
-        InlineKeyboardMarkup(kb)
+        f"Defect: *{ctx.user_data['action']}* ✅\n\n{progress_bar(8)}\n\nSelect *Vendor / SubCon*:",
+        grid_buttons(VENDORS, "vendor", per_row=2)
     )
-    return PICK_WORKTYPE
+    return PICK_VENDOR
 
 async def pick_worktype(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     val = q.data.split(":", 1)[1]
     ctx.user_data["worktype"] = val
+    # Show defect presets based on work type
+    if val == "Finishing":
+        defects = DEFECTS_FINISHING
+    elif val == "Structure":
+        defects = DEFECTS_STRUCTURE
+    else:
+        defects = DEFECTS_MEP
     await edit_or_send(
         update, ctx,
-        f"Work Type: *{val}* ✅\n\n{progress_bar(8)}\n\nSelect *Vendor / SubCon*:",
+        f"Work Type: *{val}* ✅\n\n{progress_bar(6)}\n\n⚠️ Select *Defect / Action Required*:",
+        grid_buttons(defects, "defect", per_row=2)
+    )
+    return TYPE_ACTION
+
+async def pick_defect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle defect preset button tap."""
+    q = update.callback_query
+    await q.answer()
+    val = q.data.split(":", 1)[1]
+    if val == "__custom__":
+        await edit_or_send(update, ctx, f"{progress_bar(6)}\n\n✏️ Type the *Defect* in Khmer or English:")
+        return TYPE_ACTION
+    ctx.user_data["action"] = val
+    await edit_or_send(
+        update, ctx,
+        f"Defect: *{val}* ✅\n\n{progress_bar(8)}\n\nSelect *Vendor / SubCon*:",
         grid_buttons(VENDORS, "vendor", per_row=2)
     )
     return PICK_VENDOR
@@ -985,7 +1023,8 @@ def main():
             PICK_FLOOR:      [CallbackQueryHandler(pick_floor, pattern="^floor:")],
             PICK_HTYPE:      [CallbackQueryHandler(pick_htype, pattern="^htype:"),
                                MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_htype)],
-            TYPE_ACTION:     [MessageHandler(filters.TEXT & ~filters.COMMAND, type_action)],
+            TYPE_ACTION:     [CallbackQueryHandler(pick_defect, pattern="^defect:"),
+                               MessageHandler(filters.TEXT & ~filters.COMMAND, type_action)],
             PICK_WORKTYPE:   [CallbackQueryHandler(pick_worktype, pattern="^work:")],
             PICK_VENDOR:     [CallbackQueryHandler(pick_vendor, pattern="^vendor:"),
                                MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_vendor)],
