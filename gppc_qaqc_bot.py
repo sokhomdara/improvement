@@ -74,9 +74,9 @@ DEFECTS_STRUCTURE = [
 DEFECTS_MEP = [
     "ទុយោលិច", "ឆ្លងភ្លើង"
 ]
-SUPERVISORS  = ["C32", "C16", "C45", "C63", "E6", "E20", "E22"]
-ENGINEERS    = ["C100", "C12", "C116", "C95", "C58", "C15", "C46", "C117", "C129", "C54", "C43", "C105", "C137", "C55", "C59", "C29", "C33", "C64", "C118", "C38", "M21", "C62"]
-RAISED_BY    = ["Q2", "Q3", "Q6", "Q7", "Q10", "Q11", "Q13", "Q16", "Q21", "Q26", "Q28"]
+SUPERVISORS  = ["C17", "C24", "C27", "C53", "C61", "C82", "C97", "E19", "E27", "E29", "E55", "M12"]
+ENGINEERS    = ["C17", "C24", "C27", "C53", "C61", "C82", "C97", "E19", "E27", "E29", "E55", "M12", "AD"]
+RAISED_BY    = ["Q3", "Q6", "Q7", "Q10", "Q11", "Q12", "Q13", "Q16", "Q17", "Q21", "Q25", "Q27", "Q28", "Q36"]
 HOUSE_NUMS   = [f"{i:02d}" for i in range(1, 201)]  # 01 to 200
 
 # ─────────────────────────────────────────────
@@ -366,54 +366,54 @@ async def edit_or_send(update: Update, ctx, text, reply_markup=None):
 # Admin user IDs who can use /restart (add your Telegram user ID here)
 ADMIN_IDS = [352178789]  # Dara SOKHOM - GPPC QAQC Admin
 
-# Telegram username map for @mention alerts
-# Format: "CODE": "@telegram_username"
-# Add your team members' Telegram usernames here
-SITE_MENTIONS = {
-    "C32":  "@c32_site",
-    "C16":  "@c16_site",
-    "C45":  "@c45_site",
-    "C63":  "@c63_site",
-    "E6":   "@e6_site",
-    "E20":  "@e20_site",
-    "E22":  "@e22_site",
-    "C100": "@c100_site",
-    "C12":  "@c12_site",
-    "C116": "@c116_site",
-    "C95":  "@c95_site",
-    "C58":  "@c58_site",
-    "C15":  "@c15_site",
-    "C46":  "@c46_site",
-    "C117": "@c117_site",
-    "C129": "@c129_site",
-    "C54":  "@c54_site",
-    "C43":  "@c43_site",
-    "C105": "@c105_site",
-    "C137": "@c137_site",
-    "C55":  "@c55_site",
-    "C59":  "@c59_site",
-    "C29":  "@c29_site",
-    "C33":  "@c33_site",
-    "C64":  "@c64_site",
-    "C118": "@c118_site",
-    "C38":  "@c38_site",
-    "M21":  "@m21_site",
-    "C62":  "@c62_site",
+# Team member full names for alert messages
+# Format: "CODE": ("Full Name", "@telegram_username or None")
+# Replace None with real @username when you have it
+TEAM_INFO = {
+    # QA/QC & HSE Team
+    "Q3":  ("OUK Mony Oudom",  None),
+    "Q6":  ("HOK Yeksrun",     None),
+    "Q7":  ("SOKHOM Dara",     "@sokhomdara007"),
+    "Q10": ("KHEM Vortana",    None),
+    "Q11": ("SOK Chanty",      None),
+    "Q12": ("HUO Huot",        None),
+    "Q13": ("KONG Sambath",    None),
+    "Q16": ("HUOY Seameng",    None),
+    "Q17": ("VORN Vanneth",    None),
+    "Q21": ("TLY Sophea",      None),
+    "Q25": ("CHHEURN Chamnan", None),
+    "Q27": ("IM Teklong",      None),
+    "Q28": ("CHHEN Sara",      None),
+    "Q36": ("SOEM Vicheka",    None),
+    # Site Team
+    "AD":  ("TOUCH Vanna",     None),
+    "C17": ("Mao Maran",       None),
+    "C24": ("MEN Vanna",       None),
+    "C27": ("Uch Sereykosal",  None),
+    "C53": ("Ngeth Ponlue",    None),
+    "C61": ("Nut Hok",         None),
+    "C82": ("Nhel Vechettra",  None),
+    "C97": ("LONG Rathana",    None),
+    "M12": ("Phoeung Vanna",   None),
+    "E19": ("NOY MAP",         None),
+    "E27": ("SOK CHHOM",       None),
+    "E29": ("Sor Prostouch",   None),
+    "E55": ("DEL RA",          None),
 }
 
-QAQC_MENTIONS = {
-    "Q2":  "@q2_qaqc",
-    "Q3":  "@q3_qaqc",
-    "Q6":  "@q6_qaqc",
-    "Q7":  "@q7_qaqc",
-    "Q10": "@q10_qaqc",
-    "Q11": "@q11_qaqc",
-    "Q13": "@q13_qaqc",
-    "Q16": "@q16_qaqc",
-    "Q21": "@q21_qaqc",
-    "Q26": "@q26_qaqc",
-    "Q28": "@q28_qaqc",
-}
+def get_mention(code: str) -> str:
+    """Return @username if available, else full name, else code."""
+    info = TEAM_INFO.get(code)
+    if not info:
+        return code
+    name, username = info
+    if username:
+        return f"{username} ({name})"
+    return f"*{name}* ({code})"
+
+# Keep for backward compat
+SITE_MENTIONS = {k: get_mention(k) for k in TEAM_INFO}
+QAQC_MENTIONS = SITE_MENTIONS
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -878,27 +878,36 @@ async def confirm_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             except Exception:
                 pass
 
-        # 3. Build @mention alert for site team
+        # 3. Build alert with full name + @mention for site team
         sup_code  = ctx.user_data.get("supervisor", "")
         eng_code  = ctx.user_data.get("engineer", "")
-        sup_mention = SITE_MENTIONS.get(sup_code, sup_code)
-        eng_mention = SITE_MENTIONS.get(eng_code, eng_code)
-        zone    = ctx.user_data.get("zone", "")
-        block   = ctx.user_data.get("block", "")
-        unit    = ctx.user_data.get("unit", "")
-        action  = ctx.user_data.get("action", "")
-        worktype = ctx.user_data.get("worktype", "")
+        raised    = ctx.user_data.get("raised", "")
+        zone      = ctx.user_data.get("zone", "")
+        block     = ctx.user_data.get("block", "")
+        unit      = ctx.user_data.get("unit", "")
+        action    = ctx.user_data.get("action", "")
+        worktype  = ctx.user_data.get("worktype", "")
+        floor     = ctx.user_data.get("floor", "")
+        htype     = ctx.user_data.get("htype", "")
+
+        sup_mention   = get_mention(sup_code)
+        eng_mention   = get_mention(eng_code)
+        raised_mention = get_mention(raised)
 
         alert_text = (
-            f"🚨 *NEW DEFECT ALERT — Report #{report_no}*\n"
-            f"{'─'*25}\n"
-            f"📍 Zone {zone} / Block {block} Unit {unit}\n"
-            f"⚠️ {action} ({worktype})\n"
-            f"{'─'*25}\n"
+            f"🚨 *DEFECT ALERT — Report #{report_no}*\n"
+            f"{'─'*28}\n"
+            f"📅 {ctx.user_data.get('date','')}\n"
+            f"📍 Zone {zone} / Block {block} / Unit {unit}\n"
+            f"🏠 {floor} — {htype}\n"
+            f"⚠️ *{action}* ({worktype})\n"
+            f"{'─'*28}\n"
             f"👷 Supervisor: {sup_mention}\n"
             f"🔧 Engineer: {eng_mention}\n"
-            f"{'─'*25}\n"
-            f"⚡ *Please fix this defect and use /update to close it!*"
+            f"🔎 Raised by: {raised_mention}\n"
+            f"{'─'*28}\n"
+            f"📌 Status: 🟡 Open\n"
+            f"⚡ *Please fix and use /update to close!*"
         )
         await ctx.bot.send_message(
             chat_id=chat_id,
