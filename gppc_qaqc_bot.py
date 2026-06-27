@@ -366,6 +366,55 @@ async def edit_or_send(update: Update, ctx, text, reply_markup=None):
 # Admin user IDs who can use /restart (add your Telegram user ID here)
 ADMIN_IDS = [352178789]  # Dara SOKHOM - GPPC QAQC Admin
 
+# Telegram username map for @mention alerts
+# Format: "CODE": "@telegram_username"
+# Add your team members' Telegram usernames here
+SITE_MENTIONS = {
+    "C32":  "@c32_site",
+    "C16":  "@c16_site",
+    "C45":  "@c45_site",
+    "C63":  "@c63_site",
+    "E6":   "@e6_site",
+    "E20":  "@e20_site",
+    "E22":  "@e22_site",
+    "C100": "@c100_site",
+    "C12":  "@c12_site",
+    "C116": "@c116_site",
+    "C95":  "@c95_site",
+    "C58":  "@c58_site",
+    "C15":  "@c15_site",
+    "C46":  "@c46_site",
+    "C117": "@c117_site",
+    "C129": "@c129_site",
+    "C54":  "@c54_site",
+    "C43":  "@c43_site",
+    "C105": "@c105_site",
+    "C137": "@c137_site",
+    "C55":  "@c55_site",
+    "C59":  "@c59_site",
+    "C29":  "@c29_site",
+    "C33":  "@c33_site",
+    "C64":  "@c64_site",
+    "C118": "@c118_site",
+    "C38":  "@c38_site",
+    "M21":  "@m21_site",
+    "C62":  "@c62_site",
+}
+
+QAQC_MENTIONS = {
+    "Q2":  "@q2_qaqc",
+    "Q3":  "@q3_qaqc",
+    "Q6":  "@q6_qaqc",
+    "Q7":  "@q7_qaqc",
+    "Q10": "@q10_qaqc",
+    "Q11": "@q11_qaqc",
+    "Q13": "@q13_qaqc",
+    "Q16": "@q16_qaqc",
+    "Q21": "@q21_qaqc",
+    "Q26": "@q26_qaqc",
+    "Q28": "@q28_qaqc",
+}
+
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 *QAQC Bot* is ready!\n\n"
@@ -795,12 +844,68 @@ async def confirm_report(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if q.data == "confirm:yes":
         init_excel()
         report_no = save_to_excel(ctx.user_data)
+        chat_id   = update.effective_chat.id
+
+        # 1. Edit flow message to show summary
         await q.edit_message_text(
             f"✅ *Report #{report_no} saved!*\n\n"
             + summary_text(ctx.user_data, report_no)
             + "\n\n📊 Use /export to download the Excel file.",
             parse_mode="Markdown"
         )
+
+        # 2. Send BEFORE photo in group if available
+        before_file_id = ctx.user_data.get("photo_before_local", "")
+        before_url     = ctx.user_data.get("photo_before_url", "")
+        if before_file_id and os.path.exists(before_file_id):
+            try:
+                await ctx.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=open(before_file_id, "rb"),
+                    caption=f"📷 *BEFORE photo — Report #{report_no}*",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+        elif before_url:
+            try:
+                await ctx.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=before_url,
+                    caption=f"📷 *BEFORE photo — Report #{report_no}*",
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
+
+        # 3. Build @mention alert for site team
+        sup_code  = ctx.user_data.get("supervisor", "")
+        eng_code  = ctx.user_data.get("engineer", "")
+        sup_mention = SITE_MENTIONS.get(sup_code, sup_code)
+        eng_mention = SITE_MENTIONS.get(eng_code, eng_code)
+        zone    = ctx.user_data.get("zone", "")
+        block   = ctx.user_data.get("block", "")
+        unit    = ctx.user_data.get("unit", "")
+        action  = ctx.user_data.get("action", "")
+        worktype = ctx.user_data.get("worktype", "")
+
+        alert_text = (
+            f"🚨 *NEW DEFECT ALERT — Report #{report_no}*\n"
+            f"{'─'*25}\n"
+            f"📍 Zone {zone} / Block {block} Unit {unit}\n"
+            f"⚠️ {action} ({worktype})\n"
+            f"{'─'*25}\n"
+            f"👷 Supervisor: {sup_mention}\n"
+            f"🔧 Engineer: {eng_mention}\n"
+            f"{'─'*25}\n"
+            f"⚡ *Please fix this defect and use /update to close it!*"
+        )
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=alert_text,
+            parse_mode="Markdown"
+        )
+
     else:
         await q.edit_message_text("❌ Report cancelled.")
     ctx.user_data.clear()
