@@ -316,18 +316,18 @@ def embed_photo_in_cell(ws, col_idx: int, row_idx: int, local_path: str, hyperli
     if not local_path or not os.path.exists(local_path):
         return False
     try:
-        thumb = make_thumbnail(local_path)
+        thumb = make_thumbnail(local_path, max_size=(160, 120))
         img = XLImage(thumb)
-        img.width = 90
-        img.height = 70
+        img.width = 120
+        img.height = 100
         col_letter = openpyxl.utils.get_column_letter(col_idx)
         img.anchor = f"{col_letter}{row_idx}"
         ws.add_image(img)
         if hyperlink_url:
             cell = ws.cell(row=row_idx, column=col_idx)
             cell.hyperlink = hyperlink_url
-        ws.row_dimensions[row_idx].height = 56
-        ws.column_dimensions[col_letter].width = 14
+        ws.row_dimensions[row_idx].height = 80   # taller row
+        ws.column_dimensions[col_letter].width = 20  # wider column
         return True
     except Exception as e:
         logger.warning(f"Embed photo failed: {e}")
