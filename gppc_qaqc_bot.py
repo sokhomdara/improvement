@@ -1144,7 +1144,15 @@ def main():
     keep_alive()  # Start web server FIRST so Render health check passes immediately
     init_excel()
 
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .pool_timeout(30)
+        .build()
+    )
 
     report_conv = ConversationHandler(
         entry_points=[CommandHandler("report", report_start)],
@@ -1200,7 +1208,7 @@ def main():
 
     print("🤖 QAQC Bot is running (button mode)...")
     print(f"📁 Excel file: {EXCEL_FILE}")
-    app.run_polling()
+    app.run_polling(poll_interval=0.5, timeout=10)
 
 if __name__ == "__main__":
     main()
