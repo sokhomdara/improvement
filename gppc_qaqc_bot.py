@@ -1206,9 +1206,23 @@ def main():
     app.add_handler(report_conv)
     app.add_handler(update_conv)
 
-    print("🤖 QAQC Bot is running (button mode)...")
+    print("🤖 QAQC Bot is running...")
     print(f"📁 Excel file: {EXCEL_FILE}")
-    app.run_polling(poll_interval=0.5, timeout=10)
+
+    WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")
+    PORT = int(os.environ.get("PORT", 8080))
+
+    if WEBHOOK_URL:
+        print(f"🌐 Webhook: {WEBHOOK_URL}")
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=PORT,
+            webhook_url=WEBHOOK_URL,
+            secret_token=os.environ.get("WEBHOOK_SECRET", "gppc_secret"),
+        )
+    else:
+        print("🔄 Polling mode")
+        app.run_polling(poll_interval=0.3, timeout=10, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
