@@ -26,7 +26,8 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    CallbackQueryHandler, ConversationHandler, ContextTypes, filters
+    CallbackQueryHandler, ConversationHandler, ContextTypes, filters,
+    PicklePersistence
 )
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -1113,6 +1114,27 @@ async def cancel(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled. Use /report to start again.")
     return ConversationHandler.END
 
+async def orphaned_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Catches button taps when the bot lost conversation state (e.g. after restart)."""
+    q = update.callback_query
+    await q.answer("⚠️ Session expired — please start again", show_alert=True)
+    try:
+        await q.edit_message_text(
+            "⚠️ *Session expired* (bot restarted)\n\nPlease type /report to start a new defect, or /update to continue updating a report.",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+async def orphaned_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Catches stray text messages when no conversation is active."""
+    text = update.message.text.strip().lower()
+    # Ignore short replies that look like leftover form answers
+    if len(text) <= 15:
+        await update.message.reply_text(
+            "ℹ️ No active form right now. Type /report to log a defect or /update to update one.",
+        )
+
 # ─────────────────────────────────────────────
 # KEEP-ALIVE SERVER (prevents Render from sleeping)
 # ─────────────────────────────────────────────
@@ -1144,6 +1166,7 @@ def main():
     keep_alive()  # Start web server FIRST so Render health check passes immediately
     init_excel()
 
+    persistence = PicklePersistence(filepath="bot_state.pickle")
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
@@ -1151,11 +1174,14 @@ def main():
         .read_timeout(30)
         .write_timeout(30)
         .pool_timeout(30)
+        .persistence(persistence)
         .build()
     )
 
     report_conv = ConversationHandler(
         entry_points=[CommandHandler("report", report_start)],
+        name="report_conv",
+        persistent=True,
         states={
             PICK_ZONE:       [CallbackQueryHandler(pick_zone, pattern="^zone:"),
                                MessageHandler(filters.TEXT & ~filters.COMMAND, text_fallback_zone)],
@@ -1187,6 +1213,8 @@ def main():
 
     update_conv = ConversationHandler(
         entry_points=[CommandHandler("update", update_start)],
+        name="update_conv",
+        persistent=True,
         states={
             UPD_SELECT:  [CallbackQueryHandler(upd_select, pattern="^updsel:")],
             UPD_STATUS:  [CallbackQueryHandler(upd_status_chosen, pattern="^updstat:")],
@@ -1205,6 +1233,10 @@ def main():
     app.add_handler(CommandHandler("restart", restart_bot))
     app.add_handler(report_conv)
     app.add_handler(update_conv)
+
+    # Catch-all fallback handlers (must be added LAST, lowest priority)
+    app.add_handler(CallbackQueryHandler(orphaned_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, orphaned_text))
 
     print("🤖 QAQC Bot is running...")
     print(f"📁 Excel file: {EXCEL_FILE}")
