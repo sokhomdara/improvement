@@ -2,12 +2,16 @@ name: Keep Bot Alive
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping
-        run: curl -s https://improvement-5zlq.onrender.com
+      - name: Ping bot every 5 minutes
+        run: |
+          curl -s https://improvement-5zlq.onrender.com > /dev/null
+          curl -s https://improvement-5zlq.onrender.com > /dev/null
+          curl -s https://improvement-5zlq.onrender.com > /dev/null
+          echo "Triple pinged at $(date)"
