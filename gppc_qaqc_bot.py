@@ -308,6 +308,21 @@ async def s_unit_text(update, ctx):
                kb(FLOORS,"f",row=4,custom=False))
     return S_FLOOR
 
+async def s_floor_text(update, ctx):
+    """Accept typed floor like GF 1F 2F etc"""
+    v = update.message.text.strip().upper()
+    # Normalize common typos
+    floor_map = {"GF":"GF","G":"GF","1F":"1F","1":"1F","2F":"2F","2":"2F",
+                 "3F":"3F","3":"3F","RF":"RF","R":"RF","EX":"EX",
+                 "EXTERIOR":"Exterior","UNDERGROUND":"Underground","UG":"Underground"}
+    v = floor_map.get(v, v)
+    ctx.user_data["floor"] = v
+    try: await update.message.delete()
+    except: pass
+    await edit(update,ctx,f"Floor: *{v}* ✅\n\n{pbar(5)}\n\nSelect *House Type*:",
+               kb(HTYPES,"ht",row=4,custom=False))
+    return S_HTYPE
+
 async def s_floor(update, ctx):
     q = update.callback_query; await q.answer()
     v = q.data.split(":",1)[1]
@@ -346,6 +361,21 @@ async def s_htype_text(update, ctx):
     await edit(update,ctx,f"House Type: *{ctx.user_data['htype']}* ✅\n\n{pbar(6)}\n\nSelect *Type of Work*:",
                InlineKeyboardMarkup(rows))
     return S_WORKTYPE
+
+async def s_worktype_text(update, ctx):
+    """Accept typed work type"""
+    v = update.message.text.strip()
+    wmap = {"finishing":"Finishing","structure":"Structure","mep":"MEP",
+            "infra":"Infrastructure","infrastructure":"Infrastructure",
+            "f":"Finishing","s":"Structure","m":"MEP","i":"Infrastructure"}
+    v = wmap.get(v.lower(), v.capitalize())
+    ctx.user_data["worktype"] = v
+    try: await update.message.delete()
+    except: pass
+    defects = DEFECTS.get(v, list(DEFECTS["Finishing"]))
+    await edit(update,ctx,f"Work: *{v}* ✅\n\n{pbar(7)}\n\n⚠️ Select *Defect*:",
+               kb(defects,"act",row=2,custom=True))
+    return S_ACTION
 
 async def s_worktype(update, ctx):
     q = update.callback_query; await q.answer()
@@ -669,9 +699,11 @@ def main():
             S_ZONE:       [CallbackQueryHandler(s_zone,pattern="^z:"),       MessageHandler(filters.TEXT&~filters.COMMAND,s_zone_text)],
             S_BLOCK:      [CallbackQueryHandler(s_block,pattern="^b:"),      MessageHandler(filters.TEXT&~filters.COMMAND,s_block_text)],
             S_UNIT:       [CallbackQueryHandler(s_unit,pattern="^u:"),       MessageHandler(filters.TEXT&~filters.COMMAND,s_unit_text)],
-            S_FLOOR:      [CallbackQueryHandler(s_floor,pattern="^f:")],
+            S_FLOOR:      [CallbackQueryHandler(s_floor,pattern="^f:"),
+                               MessageHandler(filters.TEXT&~filters.COMMAND,s_floor_text)],
             S_HTYPE:      [CallbackQueryHandler(s_htype,pattern="^ht:"),     MessageHandler(filters.TEXT&~filters.COMMAND,s_htype_text)],
-            S_WORKTYPE:   [CallbackQueryHandler(s_worktype,pattern="^wt:")],
+            S_WORKTYPE:   [CallbackQueryHandler(s_worktype,pattern="^wt:"),
+                               MessageHandler(filters.TEXT&~filters.COMMAND,s_worktype_text)],
             S_ACTION:     [CallbackQueryHandler(s_action,pattern="^act:"),   MessageHandler(filters.TEXT&~filters.COMMAND,s_action_text)],
             S_VENDOR:     [CallbackQueryHandler(s_vendor,pattern="^vn:"),    MessageHandler(filters.TEXT&~filters.COMMAND,s_vendor_text)],
             S_SUPERVISOR: [CallbackQueryHandler(s_supervisor,pattern="^sv:"),MessageHandler(filters.TEXT&~filters.COMMAND,s_supervisor_text)],
@@ -704,6 +736,30 @@ def main():
     app.add_handler(CommandHandler("export", export_cmd))
     app.add_handler(report_conv)
     app.add_handler(update_conv)
+
+    # Dead button handler — restarts /report automatically
+    async def dead_button(update, ctx):
+        q = update.callback_query
+        await q.answer("⚠️ Session expired — restarting...", show_alert=False)
+        ctx.user_data.clear()
+        ctx.user_data["date"] = datetime.now().strftime("%Y-%m-%d")
+        ctx.user_data["status"] = "Open"
+        try:
+            await q.edit_message_text(
+                f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
+                parse_mode="Markdown",
+                reply_markup=kb(ZONES,"z",row=8,custom=False)
+            )
+            ctx.user_data["mid"] = q.message.message_id
+        except:
+            m = await q.message.chat.send_message(
+                f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
+                parse_mode="Markdown",
+                reply_markup=kb(ZONES,"z",row=8,custom=False)
+            )
+            ctx.user_data["mid"] = m.message_id
+
+    app.add_handler(CallbackQueryHandler(dead_button))
 
     print("🤖 QAQC Bot is running...")
     app.run_polling(poll_interval=0.5, timeout=20, drop_pending_updates=True)
