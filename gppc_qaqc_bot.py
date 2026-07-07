@@ -679,6 +679,32 @@ def keep_alive():
     print(f"🌐 Keep-alive on port {port}")
 
 # ─────────────────────────────────────────────
+# DEAD BUTTON HANDLER (catches expired buttons after restart)
+# ─────────────────────────────────────────────
+async def dead_button(update, ctx):
+    """When bot restarts, old buttons become dead. Auto-restart /report."""
+    q = update.callback_query
+    await q.answer("Restarting form...", show_alert=False)
+    ctx.user_data.clear()
+    ctx.user_data["date"] = datetime.now().strftime("%Y-%m-%d")
+    ctx.user_data["status"] = "Open"
+    try:
+        await q.edit_message_text(
+            f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
+            parse_mode="Markdown",
+            reply_markup=kb(ZONES,"z",row=8,custom=False)
+        )
+        ctx.user_data["mid"] = q.message.message_id
+    except Exception:
+        m = await q.message.chat.send_message(
+            f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
+            parse_mode="Markdown",
+            reply_markup=kb(ZONES,"z",row=8,custom=False)
+        )
+        ctx.user_data["mid"] = m.message_id
+    return S_ZONE
+
+# ─────────────────────────────────────────────
 # MAIN
 # ─────────────────────────────────────────────
 def main():
@@ -737,32 +763,10 @@ def main():
     app.add_handler(report_conv)
     app.add_handler(update_conv)
 
-    # Dead button handler — restarts /report automatically
-    async def dead_button(update, ctx):
-        q = update.callback_query
-        await q.answer("⚠️ Session expired — restarting...", show_alert=False)
-        ctx.user_data.clear()
-        ctx.user_data["date"] = datetime.now().strftime("%Y-%m-%d")
-        ctx.user_data["status"] = "Open"
-        try:
-            await q.edit_message_text(
-                f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
-                parse_mode="Markdown",
-                reply_markup=kb(ZONES,"z",row=8,custom=False)
-            )
-            ctx.user_data["mid"] = q.message.message_id
-        except:
-            m = await q.message.chat.send_message(
-                f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
-                parse_mode="Markdown",
-                reply_markup=kb(ZONES,"z",row=8,custom=False)
-            )
-            ctx.user_data["mid"] = m.message_id
-
     app.add_handler(CallbackQueryHandler(dead_button))
 
     print("🤖 QAQC Bot is running...")
-    app.run_polling(poll_interval=0.5, timeout=20, drop_pending_updates=True)
+    app.run_polling(poll_interval=0.5, timeout=20)
 
 if __name__ == "__main__":
     main()
