@@ -1,16 +1,11 @@
 """
-GPPC QAQC Telegram Bot - Fast & Clean Version
-==============================================
-Project: Grand Phnom Penh City
+GPPC QAQC Bot - Text Input Version (Most Reliable)
+Uses simple step-by-step text questions - no button conflicts
 """
-
-import os
-import io
-import logging
-import threading
+import os, logging, threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler, ContextTypes, filters
@@ -18,205 +13,155 @@ from telegram.ext import (
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
-BOT_TOKEN  = os.environ.get("BOT_TOKEN", "8660783157:AAEBEb_O-z514MdZspps0rp-IH4yg3cz4NM")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8660783157:AAEBEb_O-z514MdZspps0rp-IH4yg3cz4NM")
 EXCEL_FILE = "GPPC_QAQC_Reports.xlsx"
 ADMIN_IDS  = [352178789]
-
 logging.basicConfig(level=logging.WARNING)
-logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────
-# CONVERSATION STATES
-# ─────────────────────────────────────────────
-(
-    S_ZONE, S_BLOCK, S_UNIT, S_FLOOR,
-    S_HTYPE, S_WORKTYPE, S_ACTION,
-    S_VENDOR, S_SUPERVISOR, S_ENGINEER, S_RAISED,
-    S_PHOTO, S_COMMENT, S_CONFIRM,
-    U_SELECT, U_STATUS, U_COMMENT, U_PHOTO
-) = range(18)
+# ─── STATES ───
+(ZONE, BLOCK, UNIT, FLOOR, HTYPE, WORKTYPE, ACTION,
+ VENDOR, SUPERVISOR, ENGINEER, RAISED, PHOTO, COMMENT, CONFIRM,
+ UPD_SELECT, UPD_STATUS, UPD_COMMENT, UPD_PHOTO) = range(18)
 
-# ─────────────────────────────────────────────
-# PRESETS
-# ─────────────────────────────────────────────
-ZONES      = [f"{i:02d}" for i in range(1, 51)]
-BLOCKS     = [f"{i:02d}" for i in range(1, 16)]
-UNITS      = [f"{i:02d}" for i in range(1, 100)]
-FLOORS     = ["GF","1F","2F","3F","RF","EX","Exterior","Underground"]
-HTYPES     = ["KG","QN","QNA","QNBII","TWSE","LASII","LBIII","SHC"]
-WORKTYPES  = [("🪟 Finishing","Finishing"),("🏗️ Structure","Structure"),("⚡ MEP","MEP"),("🚧 Infrastructure","Infrastructure")]
-VENDORS    = ["ឡាច ពៅ","វ៉ាន់ សាគីន","ថន ផល្លា","Pholla","NIPPON","Dulux"]
-SUPERVISORS= ["C9","C16","C32","C45","C63","E6","E20","E22"]
-ENGINEERS  = [f"C{i}" for i in range(1,76)] + [f"E{i}" for i in range(1,26)]
-RAISED_BY  = ["Q2","Q3","Q6","Q7","Q10","Q11","Q12","Q13","Q16","Q17","Q21","Q26"]
-
-DEFECTS = {
-    "Finishing":     ["ឥដ្ឋប៉ោង","ឥដ្ឋមិនពេញរ៉ង","ជញ្ជាំងបូកប៉ោង","ជ្រុងមិនត្រង់","សាច់បូកខ្លុក","ការ៉ូខ្លុក","ការ៉ូបែក","ម៉ាបបែក","ថ្នាំមិនស្អាត"],
-    "Structure":     ["បេតុងសសុះចេញដែក","បេតុងប៉ោង","តំទ្បើងដែកខុសប្លង់"],
-    "MEP":           ["ទុយោលិច","ឆ្លងភ្លើង"],
+# ─── DATA ───
+FLOORS    = ["GF","1F","2F","3F","RF","EX","Exterior","Underground"]
+HTYPES    = ["KG","QN","QNA","QNBII","TWSE","LASII","LBIII","SHC"]
+WORKTYPES = ["Finishing","Structure","MEP","Infrastructure"]
+VENDORS   = ["ឡាច ពៅ","វ៉ាន់ សាគីន","ថន ផល្លា","Pholla","NIPPON","Dulux"]
+SUPS      = ["C9","C16","C32","C45","C63","E6","E20","E22"]
+ENGS      = [f"C{i}" for i in range(1,76)] + [f"E{i}" for i in range(1,26)]
+RAISED_BY = ["Q2","Q3","Q6","Q7","Q10","Q11","Q12","Q13","Q16","Q17","Q21","Q26"]
+DEFECTS   = {
+    "Finishing":    ["ឥដ្ឋប៉ោង","ឥដ្ឋមិនពេញរ៉ង","ជញ្ជាំងបូកប៉ោង","ជ្រុងមិនត្រង់","សាច់បូកខ្លុក","ការ៉ូខ្លុក","ការ៉ូបែក","ម៉ាបបែក","ថ្នាំមិនស្អាត"],
+    "Structure":    ["បេតុងសសុះចេញដែក","បេតុងប៉ោង","តំទ្បើងដែកខុសប្លង់"],
+    "MEP":          ["ទុយោលិច","ឆ្លងភ្លើង"],
     "Infrastructure":["ផ្លូវខូច","លូទឹកស្ទះ","បណ្តាញទឹកលិច","ទ្រនាប់ខូច","ជញ្ជាំងព័រទ្រ"],
 }
 
-# ─────────────────────────────────────────────
-# EXCEL
-# ─────────────────────────────────────────────
-HEADERS = ["No","Date","Picture Before","Picture After","Zone","Block","# House / Unit",
-           "Floor","House Type","Action Required","Defect Raised By","Supervisor In Charge",
-           "Site Engineer in Charge","Type of Work","Vendor/ SubCon","Responsible by",
-           "Status","Type of Comments","Remark"]
-H_FILL  = PatternFill("solid", start_color="1F3864")
-H_FONT  = Font(name="Arial", bold=True, color="FFFFFF", size=10)
-Y_FILL  = PatternFill("solid", start_color="FFF2CC")
-G_FILL  = PatternFill("solid", start_color="E2EFDA")
-BORDER  = Border(left=Side(style="thin"),right=Side(style="thin"),top=Side(style="thin"),bottom=Side(style="thin"))
+def make_reply_kb(options, columns=4):
+    """Make reply keyboard from list"""
+    rows = []
+    row = []
+    for i, o in enumerate(options, 1):
+        row.append(o)
+        if i % columns == 0:
+            rows.append(row); row = []
+    if row: rows.append(row)
+    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True)
+
+def remove_kb():
+    return ReplyKeyboardRemove()
+
+# ─── EXCEL ───
+H_FILL = PatternFill("solid", start_color="1F3864")
+Y_FILL = PatternFill("solid", start_color="FFF2CC")
+G_FILL = PatternFill("solid", start_color="E2EFDA")
+BD = Border(left=Side(style="thin"), right=Side(style="thin"),
+            top=Side(style="thin"), bottom=Side(style="thin"))
 
 def init_excel():
     if os.path.exists(EXCEL_FILE): return
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "QAQC Reports"
+    wb = openpyxl.Workbook(); ws = wb.active; ws.title = "QAQC"
     ws["A1"] = "QUALITY MONITORING AND IMPROVEMENT"
-    ws["A1"].font = Font(name="Arial", bold=True, size=13, color="1F3864")
+    ws["A1"].font = Font(bold=True, size=13, color="1F3864")
     ws["A2"] = "PROJECT TITLE: GRAND PHNOM PENH CITY"
-    ws["A2"].font = Font(name="Arial", bold=True, size=11)
+    ws["A2"].font = Font(bold=True, size=11)
     ws.merge_cells("A1:S1"); ws.merge_cells("A2:S2")
-    for col, h in enumerate(HEADERS, 1):
-        c = ws.cell(row=3, column=col, value=h)
-        c.fill = H_FILL; c.font = H_FONT
-        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        c.border = BORDER
-    for i,w in enumerate([5,12,15,15,8,8,12,10,12,40,15,15,15,12,18,14,12,15,20],1):
+    hdrs = ["No","Date","Picture Before","Picture After","Zone","Block","Unit","Floor",
+            "House Type","Action Required","Raised By","Supervisor","Engineer",
+            "Work Type","Vendor","Responsible","Status","Comments","Remark"]
+    for c, h in enumerate(hdrs, 1):
+        cell = ws.cell(row=3, column=c, value=h)
+        cell.fill = H_FILL
+        cell.font = Font(bold=True, color="FFFFFF", size=10)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = BD
+    for i, w in enumerate([5,12,15,15,8,8,10,8,12,40,12,12,12,14,18,12,10,12,20], 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     wb.save(EXCEL_FILE)
 
 def save_report(d):
     init_excel()
-    wb = openpyxl.load_workbook(EXCEL_FILE)
-    ws = wb.active
+    wb = openpyxl.load_workbook(EXCEL_FILE); ws = wb.active
     row = ws.max_row + 1
     no  = max(0, ws.max_row - 3) + 1
-    fill = Y_FILL if d.get("status") == "Open" else G_FILL
+    fill = Y_FILL
     vals = [no, d.get("date",""), "", "", d.get("zone",""), d.get("block",""),
             d.get("unit",""), d.get("floor",""), d.get("htype",""), d.get("action",""),
             d.get("raised",""), d.get("supervisor",""), d.get("engineer",""),
-            d.get("worktype",""), d.get("vendor",""), "Site", d.get("status","Open"), "1", d.get("comment","")]
-    for col, val in enumerate(vals, 1):
-        c = ws.cell(row=row, column=col, value=val)
-        c.fill = fill; c.font = Font(name="Arial", size=10)
-        c.alignment = Alignment(vertical="center", wrap_text=True)
-        c.border = BORDER
-    # Photo link
-    for url, col in [(d.get("photo_url",""), 3)]:
-        if url:
-            c = ws.cell(row=row, column=col, value="📷 BEFORE")
-            c.hyperlink = url
-            c.font = Font(name="Arial", size=10, color="0563C1", underline="single")
-            c.fill = fill; c.border = BORDER
-            c.alignment = Alignment(horizontal="center", vertical="center")
+            d.get("worktype",""), d.get("vendor",""), "Site", "Open", "1", d.get("comment","")]
+    for c, v in enumerate(vals, 1):
+        cell = ws.cell(row=row, column=c, value=v)
+        cell.fill = fill; cell.font = Font(size=10)
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+        cell.border = BD
+    if d.get("photo_url"):
+        cell = ws.cell(row=row, column=3, value="📷 BEFORE")
+        cell.hyperlink = d["photo_url"]
+        cell.font = Font(size=10, color="0563C1", underline="single")
+        cell.fill = fill; cell.border = BD
+        cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[row].height = 18
     wb.save(EXCEL_FILE)
     return no
 
-def update_report(no, status, remark, photo_url=""):
+def update_excel(no, status, remark, photo_url=""):
     if not os.path.exists(EXCEL_FILE): return
-    wb = openpyxl.load_workbook(EXCEL_FILE)
-    ws = wb.active
+    wb = openpyxl.load_workbook(EXCEL_FILE); ws = wb.active
     for row in ws.iter_rows(min_row=4):
         if row[0].value == no:
-            row[16].value = status
-            row[18].value = remark
+            row[16].value = status; row[18].value = remark
             if photo_url:
                 c = ws.cell(row=row[0].row, column=4, value="✅ AFTER")
                 c.hyperlink = photo_url
-                c.font = Font(name="Arial", size=10, color="0563C1", underline="single")
+                c.font = Font(size=10, color="0563C1", underline="single")
                 c.alignment = Alignment(horizontal="center", vertical="center")
             fill = G_FILL if status == "Closed" else Y_FILL
             for cell in row: cell.fill = fill
             break
     wb.save(EXCEL_FILE)
 
-def all_reports():
+def get_reports():
     if not os.path.exists(EXCEL_FILE): return []
-    wb = openpyxl.load_workbook(EXCEL_FILE, data_only=True)
-    ws = wb.active
-    return [{"no":r[0],"date":r[1],"zone":r[4],"block":r[5],"unit":r[6],"action":r[9],"status":r[16]}
+    wb = openpyxl.load_workbook(EXCEL_FILE, data_only=True); ws = wb.active
+    return [{"no":r[0],"date":r[1],"zone":r[4],"block":r[5],"unit":r[6],
+             "action":r[9],"status":r[16]}
             for r in ws.iter_rows(min_row=4, values_only=True) if r[0]]
 
-# ─────────────────────────────────────────────
-# HELPERS
-# ─────────────────────────────────────────────
 SE = {"Open":"🟡","In Progress":"🔵","Closed":"🟢"}
-def sem(s): return SE.get(s,"⚪")
-def pbar(n,t=13): return "●"*n + "○"*(t-n) + f" {n}/{t}"
-
-def kb(opts, prefix, row=8, custom=True):
-    rows, r = [], []
-    for i,o in enumerate(opts,1):
-        r.append(InlineKeyboardButton(o, callback_data=f"{prefix}:{o}"))
-        if i%row==0: rows.append(r); r=[]
-    if r: rows.append(r)
-    if custom: rows.append([InlineKeyboardButton("✏️ Type custom...", callback_data=f"{prefix}:__c__")])
-    return InlineKeyboardMarkup(rows)
+def sem(s): return SE.get(s, "⚪")
+def pb(n, t=13): return "●"*n + "○"*(t-n) + f" {n}/{t}"
 
 def summary(d, no=None):
-    return (
-        f"📋 *QAQC DEFECT REPORT*\n{'─'*25}\n"
-        + (f"#️⃣ Report: *{no}*\n" if no else "")
-        + f"📅 {d.get('date','')}\n"
-        f"📍 Zone {d.get('zone','')} / Block {d.get('block','')} / Unit {d.get('unit','')}\n"
-        f"🏠 {d.get('floor','')} — {d.get('htype','')}\n"
-        f"⚠️ *{d.get('action','')}* ({d.get('worktype','')})\n"
-        f"🔧 Vendor: {d.get('vendor','')}\n"
-        f"👷 Sup: {d.get('supervisor','')} | Eng: {d.get('engineer','')}\n"
-        f"🔎 Raised: {d.get('raised','')}\n"
-        f"📌 {sem(d.get('status','Open'))} {d.get('status','Open')}\n"
-        f"💬 {d.get('comment','—')}"
-    )
+    n = f"#️⃣ Report No: *{no}*\n" if no else ""
+    return (f"📋 *QAQC DEFECT REPORT*\n{'─'*28}\n{n}"
+            f"📅 {d.get('date','')}\n"
+            f"📍 Zone {d.get('zone','')} / Block {d.get('block','')} / Unit {d.get('unit','')}\n"
+            f"🏠 {d.get('floor','')} — {d.get('htype','')}\n"
+            f"⚠️ *{d.get('action','')}* ({d.get('worktype','')})\n"
+            f"🔧 Vendor: {d.get('vendor','')}\n"
+            f"👷 Sup: {d.get('supervisor','')} | Eng: {d.get('engineer','')}\n"
+            f"🔎 Raised: {d.get('raised','')}\n"
+            f"📌 🟡 Open\n"
+            f"💬 {d.get('comment','—')}")
 
-async def edit(update, ctx, text, markup=None):
-    chat_id = update.effective_chat.id
-    mid = ctx.user_data.get("mid")
-    if update.callback_query:
-        try:
-            await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=markup)
-            ctx.user_data["mid"] = update.callback_query.message.message_id
-            return
-        except: pass
-    if mid:
-        try:
-            await ctx.bot.edit_message_text(chat_id=chat_id, message_id=mid, text=text, parse_mode="Markdown", reply_markup=markup)
-            return
-        except: pass
-    m = await ctx.bot.send_message(chat_id=chat_id, text=text, parse_mode="Markdown", reply_markup=markup)
-    ctx.user_data["mid"] = m.message_id
-
-async def get_file_url(bot, file_id):
-    try:
-        f = await bot.get_file(file_id)
-        return f.file_path
-    except: return ""
-
-# ─────────────────────────────────────────────
-# /START /HELP /PING /RESTART
-# ─────────────────────────────────────────────
+# ─── /START /PING /RESTART ───
 async def start(update, ctx):
     await update.message.reply_text(
         "👋 *Improvement Update Bot is ready!*\n\n"
-        "• /report — For QAQC បំពេញឯកសារ Improvement Case\n"
-        "• /update — For Site Team បំពេញការជួសជុល\n"
-        "• /list — View open defects\n"
+        "• /report — QAQC log new defect\n"
+        "• /update — Site team update fix status\n"
+        "• /list — View all open defects\n"
         "• /export — Download Excel report\n"
-        "• /ping — Check bot status",
-        parse_mode="Markdown"
+        "• /ping — Check bot is alive",
+        parse_mode="Markdown",
+        reply_markup=remove_kb()
     )
 
 async def ping(update, ctx):
-    rs = all_reports()
-    o = sum(1 for r in rs if r["status"]=="Open")
-    c = sum(1 for r in rs if r["status"]=="Closed")
+    rs = get_reports()
+    o = sum(1 for r in rs if r["status"] == "Open")
+    c = sum(1 for r in rs if r["status"] == "Closed")
     await update.message.reply_text(
         f"🟢 *Bot is ALIVE!*\n"
         f"🕐 {datetime.now().strftime('%d %b %Y %H:%M:%S')}\n"
@@ -225,405 +170,290 @@ async def ping(update, ctx):
         parse_mode="Markdown"
     )
 
-async def restart(update, ctx):
+async def restart_cmd(update, ctx):
     if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("❌ Admin only.")
-        return
-    await update.message.reply_text("🔄 Restarting bot... back in 5 seconds!")
+        await update.message.reply_text("❌ Admin only."); return
+    await update.message.reply_text("🔄 Restarting bot...")
     await ctx.application.stop()
     await ctx.application.shutdown()
     os._exit(0)
 
-# ─────────────────────────────────────────────
-# /REPORT FLOW
-# ─────────────────────────────────────────────
+# ─── /REPORT FLOW (Reply Keyboard - most reliable) ───
 async def report_start(update, ctx):
     ctx.user_data.clear()
     ctx.user_data["date"] = datetime.now().strftime("%Y-%m-%d")
-    ctx.user_data["status"] = "Open"
-    try: await update.message.delete()
-    except: pass
-    m = await update.effective_chat.send_message(
-        f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
+    # Build zone keyboard 01-50
+    zones = [f"{i:02d}" for i in range(1, 51)]
+    await update.message.reply_text(
+        f"📋 *New Defect Report*\n{pb(1)}\n\n🗺️ Select or type *Zone* (01–50):",
         parse_mode="Markdown",
-        reply_markup=kb(ZONES, "z", row=8, custom=False)
+        reply_markup=make_reply_kb(zones, columns=8)
     )
-    ctx.user_data["mid"] = m.message_id
-    return S_ZONE
+    return ZONE
 
-async def s_zone(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(1)}\n\n✏️ Type Zone number:")
-        return S_ZONE
-    ctx.user_data["zone"] = v
-    await edit(update,ctx,f"Zone: *{v}* ✅\n\n{pbar(2)}\n\nSelect *Block* (01–15):",
-               kb(BLOCKS,"b",row=5,custom=False))
-    return S_BLOCK
-
-async def s_zone_text(update, ctx):
+async def got_zone(update, ctx):
     ctx.user_data["zone"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Zone: *{ctx.user_data['zone']}* ✅\n\n{pbar(2)}\n\nSelect *Block*:",
-               kb(BLOCKS,"b",row=5,custom=False))
-    return S_BLOCK
+    blocks = [f"{i:02d}" for i in range(1, 16)]
+    await update.message.reply_text(
+        f"✅ Zone: *{ctx.user_data['zone']}*\n\n{pb(2)}\n\n🏗️ Select or type *Block* (01–15):",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(blocks, columns=5)
+    )
+    return BLOCK
 
-async def s_block(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(2)}\n\n✏️ Type Block number:")
-        return S_BLOCK
-    ctx.user_data["block"] = v
-    await edit(update,ctx,f"Block: *{v}* ✅\n\n{pbar(3)}\n\nSelect *Unit* (01–99):",
-               kb(UNITS,"u",row=10,custom=True))
-    return S_UNIT
-
-async def s_block_text(update, ctx):
+async def got_block(update, ctx):
     ctx.user_data["block"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Block: *{ctx.user_data['block']}* ✅\n\n{pbar(3)}\n\nSelect *Unit*:",
-               kb(UNITS,"u",row=10,custom=True))
-    return S_UNIT
+    units = [f"{i:02d}" for i in range(1, 100)]
+    await update.message.reply_text(
+        f"✅ Block: *{ctx.user_data['block']}*\n\n{pb(3)}\n\n🏠 Select or type *Unit/House number*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(units, columns=10)
+    )
+    return UNIT
 
-async def s_unit(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(3)}\n\n✏️ Type Unit/House number:")
-        return S_UNIT
-    ctx.user_data["unit"] = v
-    await edit(update,ctx,f"Unit: *{v}* ✅\n\n{pbar(4)}\n\nSelect *Floor*:",
-               kb(FLOORS,"f",row=4,custom=False))
-    return S_FLOOR
-
-async def s_unit_text(update, ctx):
+async def got_unit(update, ctx):
     ctx.user_data["unit"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Unit: *{ctx.user_data['unit']}* ✅\n\n{pbar(4)}\n\nSelect *Floor*:",
-               kb(FLOORS,"f",row=4,custom=False))
-    return S_FLOOR
+    await update.message.reply_text(
+        f"✅ Unit: *{ctx.user_data['unit']}*\n\n{pb(4)}\n\n🏢 Select or type *Floor*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(FLOORS, columns=4)
+    )
+    return FLOOR
 
-async def s_floor_text(update, ctx):
-    """Accept typed floor like GF 1F 2F etc"""
-    v = update.message.text.strip().upper()
-    # Normalize common typos
-    floor_map = {"GF":"GF","G":"GF","1F":"1F","1":"1F","2F":"2F","2":"2F",
-                 "3F":"3F","3":"3F","RF":"RF","R":"RF","EX":"EX",
-                 "EXTERIOR":"Exterior","UNDERGROUND":"Underground","UG":"Underground"}
-    v = floor_map.get(v, v)
-    ctx.user_data["floor"] = v
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Floor: *{v}* ✅\n\n{pbar(5)}\n\nSelect *House Type*:",
-               kb(HTYPES,"ht",row=4,custom=False))
-    return S_HTYPE
+async def got_floor(update, ctx):
+    ctx.user_data["floor"] = update.message.text.strip()
+    await update.message.reply_text(
+        f"✅ Floor: *{ctx.user_data['floor']}*\n\n{pb(5)}\n\n🏡 Select or type *House Type*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(HTYPES, columns=4)
+    )
+    return HTYPE
 
-async def s_floor(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    ctx.user_data["floor"] = v
-    await edit(update,ctx,f"Floor: *{v}* ✅\n\n{pbar(5)}\n\nSelect *House Type*:",
-               kb(HTYPES,"ht",row=4,custom=False))
-    return S_HTYPE
-
-async def s_htype(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(5)}\n\n✏️ Type House Type:")
-        return S_HTYPE
-    ctx.user_data["htype"] = v
-    rows=[]
-    r=[]
-    for i,(lbl,val) in enumerate(WORKTYPES,1):
-        r.append(InlineKeyboardButton(lbl,callback_data=f"wt:{val}"))
-        if i%2==0: rows.append(r); r=[]
-    if r: rows.append(r)
-    await edit(update,ctx,f"House Type: *{v}* ✅\n\n{pbar(6)}\n\nSelect *Type of Work*:",
-               InlineKeyboardMarkup(rows))
-    return S_WORKTYPE
-
-async def s_htype_text(update, ctx):
+async def got_htype(update, ctx):
     ctx.user_data["htype"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    rows=[]
-    r=[]
-    for i,(lbl,val) in enumerate(WORKTYPES,1):
-        r.append(InlineKeyboardButton(lbl,callback_data=f"wt:{val}"))
-        if i%2==0: rows.append(r); r=[]
-    if r: rows.append(r)
-    await edit(update,ctx,f"House Type: *{ctx.user_data['htype']}* ✅\n\n{pbar(6)}\n\nSelect *Type of Work*:",
-               InlineKeyboardMarkup(rows))
-    return S_WORKTYPE
+    await update.message.reply_text(
+        f"✅ House Type: *{ctx.user_data['htype']}*\n\n{pb(6)}\n\n🔧 Select or type *Type of Work*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(WORKTYPES, columns=2)
+    )
+    return WORKTYPE
 
-async def s_worktype_text(update, ctx):
-    """Accept typed work type"""
-    v = update.message.text.strip()
-    wmap = {"finishing":"Finishing","structure":"Structure","mep":"MEP",
-            "infra":"Infrastructure","infrastructure":"Infrastructure",
-            "f":"Finishing","s":"Structure","m":"MEP","i":"Infrastructure"}
-    v = wmap.get(v.lower(), v.capitalize())
-    ctx.user_data["worktype"] = v
-    try: await update.message.delete()
-    except: pass
-    defects = DEFECTS.get(v, list(DEFECTS["Finishing"]))
-    await edit(update,ctx,f"Work: *{v}* ✅\n\n{pbar(7)}\n\n⚠️ Select *Defect*:",
-               kb(defects,"act",row=2,custom=True))
-    return S_ACTION
+async def got_worktype(update, ctx):
+    wt = update.message.text.strip()
+    ctx.user_data["worktype"] = wt
+    defects = DEFECTS.get(wt, DEFECTS["Finishing"])
+    await update.message.reply_text(
+        f"✅ Work Type: *{wt}*\n\n{pb(7)}\n\n⚠️ Select or type *Defect description*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(defects, columns=2)
+    )
+    return ACTION
 
-async def s_worktype(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    ctx.user_data["worktype"] = v
-    defects = DEFECTS.get(v, [])
-    await edit(update,ctx,f"Work: *{v}* ✅\n\n{pbar(7)}\n\n⚠️ Select *Defect*:",
-               kb(defects,"act",row=2,custom=True))
-    return S_ACTION
-
-async def s_action(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(7)}\n\n✏️ Type the defect description:")
-        return S_ACTION
-    ctx.user_data["action"] = v
-    await edit(update,ctx,f"Defect: *{v}* ✅\n\n{pbar(8)}\n\nSelect *Vendor / SubCon*:",
-               kb(VENDORS,"vn",row=2,custom=True))
-    return S_VENDOR
-
-async def s_action_text(update, ctx):
+async def got_action(update, ctx):
     ctx.user_data["action"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Defect noted ✅\n\n{pbar(8)}\n\nSelect *Vendor / SubCon*:",
-               kb(VENDORS,"vn",row=2,custom=True))
-    return S_VENDOR
+    await update.message.reply_text(
+        f"✅ Defect noted\n\n{pb(8)}\n\n🏢 Select or type *Vendor/SubCon*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(VENDORS, columns=2)
+    )
+    return VENDOR
 
-async def s_vendor(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(8)}\n\n✏️ Type Vendor name:")
-        return S_VENDOR
-    ctx.user_data["vendor"] = v
-    await edit(update,ctx,f"Vendor: *{v}* ✅\n\n{pbar(9)}\n\nSelect *Supervisor*:",
-               kb(SUPERVISORS,"sv",row=4,custom=True))
-    return S_SUPERVISOR
-
-async def s_vendor_text(update, ctx):
+async def got_vendor(update, ctx):
     ctx.user_data["vendor"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Vendor: *{ctx.user_data['vendor']}* ✅\n\n{pbar(9)}\n\nSelect *Supervisor*:",
-               kb(SUPERVISORS,"sv",row=4,custom=True))
-    return S_SUPERVISOR
+    await update.message.reply_text(
+        f"✅ Vendor: *{ctx.user_data['vendor']}*\n\n{pb(9)}\n\n👷 Select or type *Supervisor*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(SUPS, columns=4)
+    )
+    return SUPERVISOR
 
-async def s_supervisor(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(9)}\n\n✏️ Type Supervisor code:")
-        return S_SUPERVISOR
-    ctx.user_data["supervisor"] = v
-    await edit(update,ctx,f"Supervisor: *{v}* ✅\n\n{pbar(10)}\n\nSelect *Site Engineer*:",
-               kb(ENGINEERS,"en",row=6,custom=True))
-    return S_ENGINEER
-
-async def s_supervisor_text(update, ctx):
+async def got_supervisor(update, ctx):
     ctx.user_data["supervisor"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Supervisor: *{ctx.user_data['supervisor']}* ✅\n\n{pbar(10)}\n\nSelect *Site Engineer*:",
-               kb(ENGINEERS,"en",row=6,custom=True))
-    return S_ENGINEER
+    await update.message.reply_text(
+        f"✅ Supervisor: *{ctx.user_data['supervisor']}*\n\n{pb(10)}\n\n🔧 Select or type *Site Engineer*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(ENGS, columns=6)
+    )
+    return ENGINEER
 
-async def s_engineer(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(10)}\n\n✏️ Type Engineer code:")
-        return S_ENGINEER
-    ctx.user_data["engineer"] = v
-    await edit(update,ctx,f"Engineer: *{v}* ✅\n\n{pbar(11)}\n\nSelect *Raised By* (QAQC):",
-               kb(RAISED_BY,"rb",row=4,custom=True))
-    return S_RAISED
-
-async def s_engineer_text(update, ctx):
+async def got_engineer(update, ctx):
     ctx.user_data["engineer"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"Engineer: *{ctx.user_data['engineer']}* ✅\n\n{pbar(11)}\n\nSelect *Raised By*:",
-               kb(RAISED_BY,"rb",row=4,custom=True))
-    return S_RAISED
+    await update.message.reply_text(
+        f"✅ Engineer: *{ctx.user_data['engineer']}*\n\n{pb(11)}\n\n🔎 Select or type *Raised By* (QAQC code):",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(RAISED_BY, columns=4)
+    )
+    return RAISED
 
-async def s_raised(update, ctx):
-    q = update.callback_query; await q.answer()
-    v = q.data.split(":",1)[1]
-    if v=="__c__":
-        await edit(update,ctx,f"{pbar(11)}\n\n✏️ Type QAQC code:")
-        return S_RAISED
-    ctx.user_data["raised"] = v
-    await edit(update,ctx,
-               f"Raised by: *{v}* ✅\n\n{pbar(12)}\n\n📷 Send *BEFORE photo*\n_(or tap Skip)_",
-               InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo",callback_data="ph:skip")]]))
-    return S_PHOTO
-
-async def s_raised_text(update, ctx):
+async def got_raised(update, ctx):
     ctx.user_data["raised"] = update.message.text.strip()
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,
-               f"Raised by: *{ctx.user_data['raised']}* ✅\n\n{pbar(12)}\n\n📷 Send *BEFORE photo*\n_(or tap Skip)_",
-               InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo",callback_data="ph:skip")]]))
-    return S_PHOTO
+    await update.message.reply_text(
+        f"✅ Raised by: *{ctx.user_data['raised']}*\n\n{pb(12)}\n\n📷 Send *BEFORE photo* of the defect\n_(or type - to skip)_",
+        parse_mode="Markdown",
+        reply_markup=remove_kb()
+    )
+    return PHOTO
 
-async def s_photo_skip(update, ctx):
-    q = update.callback_query; await q.answer()
-    ctx.user_data["photo_url"] = ""
-    ctx.user_data["photo_file_id"] = ""
-    await edit(update,ctx,f"{pbar(13)}\n\n💬 Add *comment* for site team:\n_(or type - to skip)_")
-    return S_COMMENT
-
-async def s_photo(update, ctx):
-    fid = update.message.photo[-1].file_id
-    ctx.user_data["photo_file_id"] = fid
-    ctx.user_data["photo_url"] = await get_file_url(update.get_bot(), fid)
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,f"📷 Photo received ✅\n\n{pbar(13)}\n\n💬 Add *comment*:\n_(or type - to skip)_")
-    return S_COMMENT
-
-async def s_comment(update, ctx):
-    v = update.message.text.strip()
-    ctx.user_data["comment"] = "" if v=="-" else v
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,
-               summary(ctx.user_data)+"\n\nSave this report?",
-               InlineKeyboardMarkup([[
-                   InlineKeyboardButton("✅ Confirm & Save",callback_data="cf:yes"),
-                   InlineKeyboardButton("❌ Cancel",callback_data="cf:no")
-               ]]))
-    return S_CONFIRM
-
-async def s_confirm(update, ctx):
-    q = update.callback_query; await q.answer()
-    if q.data=="cf:yes":
-        no = save_report(ctx.user_data)
-        await q.edit_message_text(
-            f"✅ *Report #{no} saved!*\n\n"+summary(ctx.user_data,no)+"\n\n📊 /export to download Excel",
-            parse_mode="Markdown"
+async def got_photo(update, ctx):
+    if update.message.photo:
+        fid = update.message.photo[-1].file_id
+        ctx.user_data["photo_fid"] = fid
+        try:
+            f = await update.get_bot().get_file(fid)
+            ctx.user_data["photo_url"] = f.file_path
+        except:
+            ctx.user_data["photo_url"] = ""
+        await update.message.reply_text(
+            f"✅ Photo received!\n\n{pb(13)}\n\n💬 Add *comment* for site team:\n_(or type - to skip)_",
+            parse_mode="Markdown",
+            reply_markup=remove_kb()
         )
-        # Send BEFORE photo in group
-        fid = ctx.user_data.get("photo_file_id","")
+    else:
+        # Text - skip photo
+        ctx.user_data["photo_fid"] = ""
+        ctx.user_data["photo_url"] = ""
+        await update.message.reply_text(
+            f"⏭️ Photo skipped\n\n{pb(13)}\n\n💬 Add *comment* for site team:\n_(or type - to skip)_",
+            parse_mode="Markdown",
+            reply_markup=remove_kb()
+        )
+    return COMMENT
+
+async def got_comment(update, ctx):
+    v = update.message.text.strip()
+    ctx.user_data["comment"] = "" if v == "-" else v
+    # Show summary with YES/NO keyboard
+    await update.message.reply_text(
+        summary(ctx.user_data) + "\n\n─────────────────────────\nSave this report?",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(["✅ YES - Save", "❌ NO - Cancel"], columns=2)
+    )
+    return CONFIRM
+
+async def got_confirm(update, ctx):
+    v = update.message.text.strip()
+    chat_id = update.effective_chat.id
+    if "YES" in v.upper() or "✅" in v:
+        no = save_report(ctx.user_data)
+        await update.message.reply_text(
+            f"✅ *Report #{no} saved successfully!*\n\n" +
+            summary(ctx.user_data, no) +
+            "\n\n📊 Use /export to download Excel",
+            parse_mode="Markdown",
+            reply_markup=remove_kb()
+        )
+        # Send BEFORE photo
+        fid = ctx.user_data.get("photo_fid", "")
         if fid:
             try:
                 await ctx.bot.send_photo(
-                    chat_id=update.effective_chat.id, photo=fid,
-                    caption=f"📷 *BEFORE — Report #{no}*", parse_mode="Markdown"
+                    chat_id=chat_id, photo=fid,
+                    caption=f"📷 *BEFORE photo — Report #{no}*",
+                    parse_mode="Markdown"
                 )
             except: pass
         # Alert message
-        sup = ctx.user_data.get("supervisor","")
-        eng = ctx.user_data.get("engineer","")
-        alert = (
-            f"🚨 *DEFECT ALERT — Report #{no}*\n{'─'*25}\n"
-            f"📍 Zone {ctx.user_data.get('zone','')} / Block {ctx.user_data.get('block','')} / Unit {ctx.user_data.get('unit','')}\n"
-            f"🏠 {ctx.user_data.get('floor','')} — {ctx.user_data.get('htype','')}\n"
-            f"⚠️ *{ctx.user_data.get('action','')}* ({ctx.user_data.get('worktype','')})\n"
-            f"{'─'*25}\n"
-            f"👷 Supervisor: *{sup}*\n"
-            f"🔧 Engineer: *{eng}*\n"
-            f"🔎 Raised by: *{ctx.user_data.get('raised','')}*\n"
-            f"{'─'*25}\n"
-            f"📌 🟡 Open — please fix and /update to close!"
+        sup = ctx.user_data.get("supervisor", "—")
+        eng = ctx.user_data.get("engineer", "—")
+        raised = ctx.user_data.get("raised", "—")
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=(f"🚨 *DEFECT ALERT — Report #{no}*\n{'─'*28}\n"
+                  f"📍 Zone {ctx.user_data.get('zone','')} / Block {ctx.user_data.get('block','')} / Unit {ctx.user_data.get('unit','')}\n"
+                  f"🏠 {ctx.user_data.get('floor','')} — {ctx.user_data.get('htype','')}\n"
+                  f"⚠️ *{ctx.user_data.get('action','')}* ({ctx.user_data.get('worktype','')})\n"
+                  f"{'─'*28}\n"
+                  f"👷 Supervisor: *{sup}*\n"
+                  f"🔧 Engineer: *{eng}*\n"
+                  f"🔎 Raised by: *{raised}*\n"
+                  f"{'─'*28}\n"
+                  f"📌 🟡 Open — please fix and use /update to close!"),
+            parse_mode="Markdown"
         )
-        await ctx.bot.send_message(chat_id=update.effective_chat.id, text=alert, parse_mode="Markdown")
     else:
-        await q.edit_message_text("❌ Report cancelled.")
+        await update.message.reply_text(
+            "❌ Report cancelled. Type /report to start again.",
+            reply_markup=remove_kb()
+        )
     ctx.user_data.clear()
     return ConversationHandler.END
 
-# ─────────────────────────────────────────────
-# /UPDATE FLOW
-# ─────────────────────────────────────────────
+# ─── /UPDATE FLOW ───
 async def update_start(update, ctx):
     ctx.user_data.clear()
-    reports = [r for r in all_reports() if r["status"]!="Closed"]
-    if not reports:
-        await update.message.reply_text("✅ No open defects.")
+    rs = [r for r in get_reports() if r["status"] != "Closed"]
+    if not rs:
+        await update.message.reply_text("✅ No open defects to update.", reply_markup=remove_kb())
         return ConversationHandler.END
-    lines = "\n".join([f"{sem(r['status'])} *#{r['no']}* Z{r['zone']}/B{r['block']} — {str(r['action'])[:30]}..." for r in reports[-15:]])
-    rows,r=[],[]
-    for i,rep in enumerate(reports[-15:],1):
-        r.append(InlineKeyboardButton(f"#{rep['no']}",callback_data=f"us:{rep['no']}"))
-        if i%5==0: rows.append(r); r=[]
-    if r: rows.append(r)
-    try: await update.message.delete()
-    except: pass
-    m = await update.effective_chat.send_message(
-        f"📋 *Open Defects:*\n{lines}\n\nTap report to update:",
-        parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(rows)
+    lines = "\n".join([
+        f"{sem(r['status'])} *#{r['no']}* Z{r['zone']}/B{r['block']} — {str(r['action'])[:30]}..."
+        for r in rs[-15:]
+    ])
+    nums = [f"#{r['no']}" for r in rs[-15:]]
+    await update.message.reply_text(
+        f"📋 *Open Defects:*\n{lines}\n\nType the report number to update (e.g. 1):",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(nums, columns=5)
     )
-    ctx.user_data["mid"] = m.message_id
-    return U_SELECT
+    return UPD_SELECT
 
-async def u_select(update, ctx):
-    q = update.callback_query; await q.answer()
-    ctx.user_data["upd_no"] = int(q.data.split(":",1)[1])
-    await edit(update,ctx,f"Report #{ctx.user_data['upd_no']} — Select new *Status*:",
-               InlineKeyboardMarkup([[
-                   InlineKeyboardButton("🟡 Open",callback_data="ust:Open"),
-                   InlineKeyboardButton("🔵 In Progress",callback_data="ust:In Progress"),
-                   InlineKeyboardButton("🟢 Closed",callback_data="ust:Closed"),
-               ]]))
-    return U_STATUS
+async def upd_select(update, ctx):
+    v = update.message.text.strip().lstrip("#")
+    try:
+        ctx.user_data["upd_no"] = int(v)
+    except:
+        await update.message.reply_text("❌ Please enter a valid number.")
+        return UPD_SELECT
+    await update.message.reply_text(
+        f"Report *#{ctx.user_data['upd_no']}* — Select new *Status*:",
+        parse_mode="Markdown",
+        reply_markup=make_reply_kb(["🟡 Open","🔵 In Progress","🟢 Closed"], columns=3)
+    )
+    return UPD_STATUS
 
-async def u_status(update, ctx):
-    q = update.callback_query; await q.answer()
-    ctx.user_data["upd_status"] = q.data.split(":",1)[1]
-    await edit(update,ctx,
-               f"Status: *{ctx.user_data['upd_status']}* ✅\n\n💬 Describe what was done:\n_(or type - to skip)_")
-    return U_COMMENT
-
-async def u_comment(update, ctx):
+async def upd_status(update, ctx):
     v = update.message.text.strip()
-    ctx.user_data["upd_comment"] = "" if v=="-" else v
-    try: await update.message.delete()
-    except: pass
-    await edit(update,ctx,
-               "📷 Send *AFTER photo*:\n_(or tap Skip)_",
-               InlineKeyboardMarkup([[InlineKeyboardButton("⏭️ Skip photo",callback_data="uph:skip")]]))
-    return U_PHOTO
+    if "Open" in v: ctx.user_data["upd_status"] = "Open"
+    elif "Progress" in v: ctx.user_data["upd_status"] = "In Progress"
+    elif "Closed" in v: ctx.user_data["upd_status"] = "Closed"
+    else: ctx.user_data["upd_status"] = v
+    await update.message.reply_text(
+        f"✅ Status: *{ctx.user_data['upd_status']}*\n\n💬 Describe what was done to fix it:\n_(or type - to skip)_",
+        parse_mode="Markdown",
+        reply_markup=remove_kb()
+    )
+    return UPD_COMMENT
 
-async def u_photo_skip(update, ctx):
-    q = update.callback_query; await q.answer()
-    await finish_update(update, ctx, "", "")
-    return ConversationHandler.END
+async def upd_comment(update, ctx):
+    v = update.message.text.strip()
+    ctx.user_data["upd_comment"] = "" if v == "-" else v
+    await update.message.reply_text(
+        "📷 Send *AFTER photo* (completion proof)\n_(or type - to skip)_",
+        parse_mode="Markdown",
+        reply_markup=remove_kb()
+    )
+    return UPD_PHOTO
 
-async def u_photo(update, ctx):
-    fid = update.message.photo[-1].file_id
-    url = await get_file_url(update.get_bot(), fid)
-    try: await update.message.delete()
-    except: pass
-    await finish_update(update, ctx, fid, url)
-    return ConversationHandler.END
-
-async def finish_update(update, ctx, fid, url):
-    no     = ctx.user_data["upd_no"]
+async def upd_photo(update, ctx):
+    no = ctx.user_data["upd_no"]
     status = ctx.user_data["upd_status"]
-    comment= ctx.user_data["upd_comment"]
-    update_report(no, status, comment, url)
-    await edit(update,ctx,
-               f"✅ *Report #{no} updated!*\n"
-               f"Status → {sem(status)} *{status}*\n"
-               f"💬 {comment or '—'}")
+    comment = ctx.user_data["upd_comment"]
+    photo_url = ""
+    fid = ""
+    if update.message.photo:
+        fid = update.message.photo[-1].file_id
+        try:
+            f = await update.get_bot().get_file(fid)
+            photo_url = f.file_path
+        except: pass
+    update_excel(no, status, comment, photo_url)
+    await update.message.reply_text(
+        f"✅ *Report #{no} updated!*\n"
+        f"Status → {sem(status)} *{status}*\n"
+        f"💬 {comment or '—'}",
+        parse_mode="Markdown",
+        reply_markup=remove_kb()
+    )
     if fid:
         try:
             await ctx.bot.send_photo(
@@ -633,21 +463,25 @@ async def finish_update(update, ctx, fid, url):
             )
         except: pass
     ctx.user_data.clear()
+    return ConversationHandler.END
 
-# ─────────────────────────────────────────────
-# /LIST /EXPORT
-# ─────────────────────────────────────────────
+# ─── /LIST /EXPORT ───
 async def list_cmd(update, ctx):
-    rs = all_reports()
+    rs = get_reports()
     if not rs:
-        await update.message.reply_text("📭 No reports yet. Use /report to log the first defect.")
+        await update.message.reply_text("📭 No reports yet. Use /report to log first defect.")
         return
-    o=sum(1 for r in rs if r["status"]=="Open")
-    p=sum(1 for r in rs if r["status"]=="In Progress")
-    c=sum(1 for r in rs if r["status"]=="Closed")
-    lines="\n".join([f"{sem(r['status'])} *#{r['no']}* {r['date']} | Z{r['zone']}/B{r['block']} {r['unit']} | {str(r['action'])[:30]}..." for r in rs[-20:]])
+    o = sum(1 for r in rs if r["status"] == "Open")
+    p = sum(1 for r in rs if r["status"] == "In Progress")
+    c = sum(1 for r in rs if r["status"] == "Closed")
+    lines = "\n".join([
+        f"{sem(r['status'])} *#{r['no']}* {r['date']} | Z{r['zone']}/B{r['block']} | {str(r['action'])[:25]}..."
+        for r in rs[-20:]
+    ])
     await update.message.reply_text(
-        f"📊 *QAQC Report Summary*\nTotal: {len(rs)} | 🟡 Open: {o} | 🔵 Progress: {p} | 🟢 Closed: {c}\n{'─'*25}\n{lines}",
+        f"📊 *QAQC Report Summary*\n"
+        f"Total: {len(rs)} | 🟡 Open: {o} | 🔵 Progress: {p} | 🟢 Closed: {c}\n"
+        f"{'─'*28}\n{lines}",
         parse_mode="Markdown"
     )
 
@@ -656,116 +490,88 @@ async def export_cmd(update, ctx):
         await update.message.reply_text("📭 No reports yet.")
         return
     await update.message.reply_document(
-        document=open(EXCEL_FILE,"rb"),
+        document=open(EXCEL_FILE, "rb"),
         filename=f"GPPC_QAQC_{datetime.now().strftime('%Y%m%d')}.xlsx",
         caption=f"📊 Quality Monitoring Report\n{datetime.now().strftime('%d %b %Y %H:%M')}"
     )
 
-# ─────────────────────────────────────────────
-# KEEP ALIVE
-# ─────────────────────────────────────────────
-class KAH(BaseHTTPRequestHandler):
+async def cancel(update, ctx):
+    ctx.user_data.clear()
+    await update.message.reply_text(
+        "❌ Cancelled. Type /report to start again.",
+        reply_markup=remove_kb()
+    )
+    return ConversationHandler.END
+
+# ─── KEEP ALIVE ───
+class KA(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200); self.send_header("Content-Type","text/plain"); self.end_headers()
         self.wfile.write(b"OK")
     def do_HEAD(self):
         self.send_response(200); self.end_headers()
-    def log_message(self,*a): pass
+    def log_message(self, *a): pass
 
 def keep_alive():
-    port = int(os.environ.get("PORT",8080))
-    t = threading.Thread(target=lambda: HTTPServer(("0.0.0.0",port),KAH).serve_forever())
+    port = int(os.environ.get("PORT", 8080))
+    t = threading.Thread(target=lambda: HTTPServer(("0.0.0.0", port), KA).serve_forever())
     t.daemon = True; t.start()
-    print(f"🌐 Keep-alive on port {port}")
+    print(f"🌐 Keep-alive port {port}")
 
-# ─────────────────────────────────────────────
-# DEAD BUTTON HANDLER (catches expired buttons after restart)
-# ─────────────────────────────────────────────
-async def dead_button(update, ctx):
-    """When bot restarts, old buttons become dead. Auto-restart /report."""
-    q = update.callback_query
-    await q.answer("Restarting form...", show_alert=False)
-    ctx.user_data.clear()
-    ctx.user_data["date"] = datetime.now().strftime("%Y-%m-%d")
-    ctx.user_data["status"] = "Open"
-    try:
-        await q.edit_message_text(
-            f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
-            parse_mode="Markdown",
-            reply_markup=kb(ZONES,"z",row=8,custom=False)
-        )
-        ctx.user_data["mid"] = q.message.message_id
-    except Exception:
-        m = await q.message.chat.send_message(
-            f"📋 *New Defect Report*\n{pbar(1)}\n\nSelect *Zone* (01–50):",
-            parse_mode="Markdown",
-            reply_markup=kb(ZONES,"z",row=8,custom=False)
-        )
-        ctx.user_data["mid"] = m.message_id
-    return S_ZONE
-
-# ─────────────────────────────────────────────
-# MAIN
-# ─────────────────────────────────────────────
+# ─── MAIN ───
 def main():
     keep_alive()
     init_excel()
+    app = (ApplicationBuilder().token(BOT_TOKEN)
+           .connect_timeout(30).read_timeout(30).write_timeout(30).build())
 
-    app = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .connect_timeout(30).read_timeout(30).write_timeout(30)
-        .build()
-    )
+    TEXT = filters.TEXT & ~filters.COMMAND
+    PHOTO_OR_TEXT = filters.PHOTO | (filters.TEXT & ~filters.COMMAND)
 
     report_conv = ConversationHandler(
         entry_points=[CommandHandler("report", report_start)],
         allow_reentry=True,
         states={
-            S_ZONE:       [CallbackQueryHandler(s_zone,pattern="^z:"),       MessageHandler(filters.TEXT&~filters.COMMAND,s_zone_text)],
-            S_BLOCK:      [CallbackQueryHandler(s_block,pattern="^b:"),      MessageHandler(filters.TEXT&~filters.COMMAND,s_block_text)],
-            S_UNIT:       [CallbackQueryHandler(s_unit,pattern="^u:"),       MessageHandler(filters.TEXT&~filters.COMMAND,s_unit_text)],
-            S_FLOOR:      [CallbackQueryHandler(s_floor,pattern="^f:"),
-                               MessageHandler(filters.TEXT&~filters.COMMAND,s_floor_text)],
-            S_HTYPE:      [CallbackQueryHandler(s_htype,pattern="^ht:"),     MessageHandler(filters.TEXT&~filters.COMMAND,s_htype_text)],
-            S_WORKTYPE:   [CallbackQueryHandler(s_worktype,pattern="^wt:"),
-                               MessageHandler(filters.TEXT&~filters.COMMAND,s_worktype_text)],
-            S_ACTION:     [CallbackQueryHandler(s_action,pattern="^act:"),   MessageHandler(filters.TEXT&~filters.COMMAND,s_action_text)],
-            S_VENDOR:     [CallbackQueryHandler(s_vendor,pattern="^vn:"),    MessageHandler(filters.TEXT&~filters.COMMAND,s_vendor_text)],
-            S_SUPERVISOR: [CallbackQueryHandler(s_supervisor,pattern="^sv:"),MessageHandler(filters.TEXT&~filters.COMMAND,s_supervisor_text)],
-            S_ENGINEER:   [CallbackQueryHandler(s_engineer,pattern="^en:"),  MessageHandler(filters.TEXT&~filters.COMMAND,s_engineer_text)],
-            S_RAISED:     [CallbackQueryHandler(s_raised,pattern="^rb:"),    MessageHandler(filters.TEXT&~filters.COMMAND,s_raised_text)],
-            S_PHOTO:      [CallbackQueryHandler(s_photo_skip,pattern="^ph:skip"), MessageHandler(filters.PHOTO,s_photo)],
-            S_COMMENT:    [MessageHandler(filters.TEXT&~filters.COMMAND,s_comment)],
-            S_CONFIRM:    [CallbackQueryHandler(s_confirm,pattern="^cf:")],
+            ZONE:       [MessageHandler(TEXT, got_zone)],
+            BLOCK:      [MessageHandler(TEXT, got_block)],
+            UNIT:       [MessageHandler(TEXT, got_unit)],
+            FLOOR:      [MessageHandler(TEXT, got_floor)],
+            HTYPE:      [MessageHandler(TEXT, got_htype)],
+            WORKTYPE:   [MessageHandler(TEXT, got_worktype)],
+            ACTION:     [MessageHandler(TEXT, got_action)],
+            VENDOR:     [MessageHandler(TEXT, got_vendor)],
+            SUPERVISOR: [MessageHandler(TEXT, got_supervisor)],
+            ENGINEER:   [MessageHandler(TEXT, got_engineer)],
+            RAISED:     [MessageHandler(TEXT, got_raised)],
+            PHOTO:      [MessageHandler(PHOTO_OR_TEXT, got_photo)],
+            COMMENT:    [MessageHandler(TEXT, got_comment)],
+            CONFIRM:    [MessageHandler(TEXT, got_confirm)],
         },
-        fallbacks=[CommandHandler("report",report_start)],
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("report", report_start)],
     )
 
     update_conv = ConversationHandler(
         entry_points=[CommandHandler("update", update_start)],
         allow_reentry=True,
         states={
-            U_SELECT:  [CallbackQueryHandler(u_select,pattern="^us:")],
-            U_STATUS:  [CallbackQueryHandler(u_status,pattern="^ust:")],
-            U_COMMENT: [MessageHandler(filters.TEXT&~filters.COMMAND,u_comment)],
-            U_PHOTO:   [CallbackQueryHandler(u_photo_skip,pattern="^uph:skip"), MessageHandler(filters.PHOTO,u_photo)],
+            UPD_SELECT:  [MessageHandler(TEXT, upd_select)],
+            UPD_STATUS:  [MessageHandler(TEXT, upd_status)],
+            UPD_COMMENT: [MessageHandler(TEXT, upd_comment)],
+            UPD_PHOTO:   [MessageHandler(PHOTO_OR_TEXT, upd_photo)],
         },
-        fallbacks=[CommandHandler("update",update_start)],
+        fallbacks=[CommandHandler("cancel", cancel), CommandHandler("update", update_start)],
     )
 
-    app.add_handler(CommandHandler("start",  start))
-    app.add_handler(CommandHandler("help",   start))
-    app.add_handler(CommandHandler("ping",   ping))
-    app.add_handler(CommandHandler("restart",restart))
-    app.add_handler(CommandHandler("list",   list_cmd))
-    app.add_handler(CommandHandler("export", export_cmd))
+    app.add_handler(CommandHandler("start",   start))
+    app.add_handler(CommandHandler("help",    start))
+    app.add_handler(CommandHandler("ping",    ping))
+    app.add_handler(CommandHandler("restart", restart_cmd))
+    app.add_handler(CommandHandler("list",    list_cmd))
+    app.add_handler(CommandHandler("export",  export_cmd))
     app.add_handler(report_conv)
     app.add_handler(update_conv)
 
-    app.add_handler(CallbackQueryHandler(dead_button))
-
-    print("🤖 QAQC Bot is running...")
+    print("🤖 QAQC Bot running - Text Input Mode")
     app.run_polling(poll_interval=0.5, timeout=20)
 
 if __name__ == "__main__":
