@@ -95,24 +95,71 @@ def save_report(d):
         cell.fill = fill; cell.font = Font(size=10)
         cell.alignment = Alignment(vertical="center", wrap_text=True)
         cell.border = BD
-    if d.get("photo_url"):
+    # Embed actual photo thumbnail in cell C
+    local_path = d.get("photo_local_path", "")
+    if local_path and os.path.exists(local_path):
+        try:
+            from openpyxl.drawing.image import Image as XLImage
+            from PIL import Image as PILImage
+            img = PILImage.open(local_path)
+            img.thumbnail((150, 120))
+            thumb = local_path + "_th.jpg"
+            img.convert("RGB").save(thumb, "JPEG", quality=85)
+            xl = XLImage(thumb)
+            xl.width = 150; xl.height = 120
+            xl.anchor = f"C{row}"
+            ws.add_image(xl)
+            ws.row_dimensions[row].height = 95
+            ws.column_dimensions["C"].width = 22
+        except:
+            # Fallback to link
+            cell = ws.cell(row=row, column=3, value="📷 BEFORE")
+            if d.get("photo_url"):
+                cell.hyperlink = d["photo_url"]
+                cell.font = Font(size=10, color="0563C1", underline="single")
+            cell.fill = fill; cell.border = BD
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+    elif d.get("photo_url"):
         cell = ws.cell(row=row, column=3, value="📷 BEFORE")
         cell.hyperlink = d["photo_url"]
         cell.font = Font(size=10, color="0563C1", underline="single")
         cell.fill = fill; cell.border = BD
         cell.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[row].height = 18
+        ws.row_dimensions[row].height = 18
+    else:
+        ws.row_dimensions[row].height = 18
     wb.save(EXCEL_FILE)
     return no
 
-def update_excel(no, status, remark, photo_url=""):
+def update_excel(no, status, remark, photo_url="", photo_local=""):
     if not os.path.exists(EXCEL_FILE): return
     wb = openpyxl.load_workbook(EXCEL_FILE); ws = wb.active
     for row in ws.iter_rows(min_row=4):
         if row[0].value == no:
+            row_idx = row[0].row
             row[16].value = status; row[18].value = remark
-            if photo_url:
-                c = ws.cell(row=row[0].row, column=4, value="✅ AFTER")
+            if photo_local and os.path.exists(photo_local):
+                try:
+                    from openpyxl.drawing.image import Image as XLImage
+                    from PIL import Image as PILImage
+                    img = PILImage.open(photo_local)
+                    img.thumbnail((150, 120))
+                    thumb = photo_local + "_th.jpg"
+                    img.convert("RGB").save(thumb, "JPEG", quality=85)
+                    xl = XLImage(thumb)
+                    xl.width = 150; xl.height = 120
+                    xl.anchor = f"D{row_idx}"
+                    ws.add_image(xl)
+                    ws.row_dimensions[row_idx].height = 95
+                    ws.column_dimensions["D"].width = 22
+                except:
+                    if photo_url:
+                        c = ws.cell(row=row_idx, column=4, value="✅ AFTER")
+                        c.hyperlink = photo_url
+                        c.font = Font(size=10, color="0563C1", underline="single")
+                        c.alignment = Alignment(horizontal="center", vertical="center")
+            elif photo_url:
+                c = ws.cell(row=row_idx, column=4, value="✅ AFTER")
                 c.hyperlink = photo_url
                 c.font = Font(size=10, color="0563C1", underline="single")
                 c.alignment = Alignment(horizontal="center", vertical="center")
@@ -301,8 +348,14 @@ async def got_photo(update, ctx):
         try:
             f = await update.get_bot().get_file(fid)
             ctx.user_data["photo_url"] = f.file_path
+            # Download locally for Excel embedding
+            os.makedirs("photos", exist_ok=True)
+            local_path = f"photos/before_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            await f.download_to_drive(local_path)
+            ctx.user_data["photo_local_path"] = local_path
         except:
             ctx.user_data["photo_url"] = ""
+            ctx.user_data["photo_local_path"] = ""
         await update.message.reply_text(
             f"✅ Photo received!\n\n{pb(13)}\n\n💬 Add *comment* for site team:\n_(or type - to skip)_",
             parse_mode="Markdown",
@@ -439,14 +492,18 @@ async def upd_photo(update, ctx):
     status = ctx.user_data["upd_status"]
     comment = ctx.user_data["upd_comment"]
     photo_url = ""
+    photo_local = ""
     fid = ""
     if update.message.photo:
         fid = update.message.photo[-1].file_id
         try:
             f = await update.get_bot().get_file(fid)
             photo_url = f.file_path
+            os.makedirs("photos", exist_ok=True)
+            photo_local = f"photos/after_{no}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+            await f.download_to_drive(photo_local)
         except: pass
-    update_excel(no, status, comment, photo_url)
+    update_excel(no, status, comment, photo_url, photo_local)
     await update.message.reply_text(
         f"✅ *Report #{no} updated!*\n"
         f"Status → {sem(status)} *{status}*\n"
